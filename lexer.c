@@ -54,7 +54,7 @@ static inline void* _alloc(size_t size)
     return malloc(size);
 }
 
-int read_file(struct lexer_state *state, const char *filename)
+int hd_read_file(struct lexer_state *state, const char *filename)
 {
     int rc = 0;
 
@@ -97,9 +97,9 @@ static int compare_pairs(const void *a, const void *b)
     return rc;
 }
 
-struct node *dispatch(const char *input, int *pos);
+struct node *hd_dispatch(const char *input, int *pos);
 
-struct node *handle_bool(const char *input, int *pos)
+struct node *hd_handle_bool(const char *input, int *pos)
 {
     struct node *result = NULL;
 
@@ -117,7 +117,7 @@ struct node *handle_bool(const char *input, int *pos)
     return result;
 }
 
-struct node *handle_hash(const char *input, int *pos)
+struct node *hd_handle_hash(const char *input, int *pos)
 {
     struct node *result = NULL;
 
@@ -132,8 +132,8 @@ struct node *handle_hash(const char *input, int *pos)
 
     struct hashval *pairs = _alloc(len * sizeof *pairs);
     for (int i = 0; i < len; i++) {
-        pairs[i].key = dispatch(input, pos);
-        pairs[i].val = dispatch(input, pos);
+        pairs[i].key = hd_dispatch(input, pos);
+        pairs[i].val = hd_dispatch(input, pos);
     }
 
     // putting entries in order allows bsearch() on them
@@ -149,7 +149,7 @@ struct node *handle_hash(const char *input, int *pos)
     return result;
 }
 
-struct node *handle_string(const char *input, int *pos)
+struct node *hd_handle_string(const char *input, int *pos)
 {
     struct node *result = NULL;
 
@@ -177,7 +177,7 @@ struct node *handle_string(const char *input, int *pos)
     return result;
 }
 
-struct node *handle_int(const char *input, int *pos)
+struct node *hd_handle_int(const char *input, int *pos)
 {
     struct node *result = NULL;
 
@@ -195,23 +195,71 @@ struct node *handle_int(const char *input, int *pos)
     return result;
 }
 
-struct node *dispatch(const char *input, int *pos)
+struct node *hd_dispatch(const char *input, int *pos)
 {
     struct node *result = NULL;
 
     switch (input[*pos]) {
-        case NODE_BOOL:   result = handle_bool  (input, pos); break;
-        case NODE_HASH:   result = handle_hash  (input, pos); break;
-        case NODE_STRING: result = handle_string(input, pos); break;
-        case NODE_INT:    result = handle_int   (input, pos); break;
+        case NODE_BOOL:   result = hd_handle_bool  (input, pos); break;
+        case NODE_HASH:   result = hd_handle_hash  (input, pos); break;
+        case NODE_STRING: result = hd_handle_string(input, pos); break;
+        case NODE_INT:    result = hd_handle_int   (input, pos); break;
 
         case '}':
-        case ';': (*pos)++; result = dispatch(input, pos); break;
+        case ';': (*pos)++; result = hd_dispatch(input, pos); break;
 
         default: break;
     }
 
     return result;
+}
+
+#define INDENT_SIZE 4
+static int _hd_dump_recursive(const struct node *node, int level)
+{
+    int rc = 0;
+
+    char spaces[(level + 1) * INDENT_SIZE + 1];
+    memset(spaces, ' ', sizeof spaces - 1);
+    spaces[sizeof spaces - 1] = 0;
+
+    char less[level * INDENT_SIZE + 1];
+    memset(less, ' ', sizeof less - 1);
+    less[sizeof less - 1] = 0;
+
+    switch (node->type) {
+        case NODE_STRING: printf("\"%s\"", node->val.s.val); break;
+        case NODE_BOOL  : printf("%s"    , node->val.b ? "true" : "false");     break;
+        case NODE_INT   : printf("%ld"   , node->val.i);     break;
+        case NODE_HASH  :
+            fputs("{\n", stdout);
+            for (int i = 0; i < node->val.a.len; i++) {
+                fputs(spaces, stdout);
+                rc = _hd_dump_recursive(node->val.a.pairs[i].key, level + 1);
+                //fputs(": key", stdout);
+                fputs(" = ", stdout);
+                rc = _hd_dump_recursive(node->val.a.pairs[i].val, level + 1);
+                //fputs(": val", stdout);
+                fputs("\n", stdout);
+            }
+
+            fputs(less, stdout);
+            fputs("}", stdout);
+            break;
+        default: return -1;
+    }
+
+    return rc;
+}
+
+int hd_dump(const struct node *node)
+{
+    int rc = 0;
+
+    rc = _hd_dump_recursive(node, 0);
+    fputc('\n', stdout);
+
+    return rc;
 }
 
 int main(int argc, char *argv[])
@@ -225,9 +273,11 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    rc = read_file(&state, argv[1]);
+    rc = hd_read_file(&state, argv[1]);
     int pos = 0;
-    struct node *result = dispatch(state.buf, &pos);
+    struct node *result = hd_dispatch(state.buf, &pos);
+
+    rc = hd_dump(result);
 
     return rc;
 }
