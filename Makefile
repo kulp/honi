@@ -5,3 +5,4 @@ CFLAGS  += -g3 -Wno-unused
 
 all: lexer
 
+lexer: lexer.o filestore.o

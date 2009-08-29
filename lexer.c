@@ -1,27 +1,14 @@
-#include <errno.h>
-#include <stdbool.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
+#include "filestore.h"
+#include "lexer.h"
 
-#define _err(...) do { \
-    fprintf(stderr, __VA_ARGS__); \
-    fprintf(stderr, "\n"); \
-} while (0)
+#include <stdbool.h>
+#include <stdlib.h>
 
 #define PARSE_FAILURE ((void*)-1)
 
 struct lexer_state {
-    /// @todo abstract away the data-getting details; add a function pointer
-    /// here to fetch next data with, and add an implementation that uses files,
-    /// as well as one that uses a given buffer
-    FILE *file;
-    long start;
-    long stop;
-    struct stat stat;
-    char buf[BUFSIZ];
+    chunker_t chunker;
+    void *userdata;
 };
 
 struct node {
@@ -30,6 +17,7 @@ struct node {
         NODE_BOOL   = 'b',
         NODE_INT    = 'i',
         NODE_STRING = 's',
+        NODE_NULL   = 'N',
     } type;
     union {
         struct hash {
@@ -54,31 +42,6 @@ static inline void* _alloc(size_t size)
     return malloc(size);
 }
 
-int hd_read_file(struct lexer_state *state, const char *filename)
-{
-    int rc = 0;
-
-    state->file = fopen(filename, "r");
-    if (!state->file) {
-        _err("File '%s' could not be opened (%d: %s)",
-             filename, errno, strerror(errno));
-        return -1;
-    }
-
-    rc = fstat(fileno(state->file), &state->stat);
-    if (rc) {
-        _err("fstat: %d: %s", errno, strerror(errno));
-        return rc;
-    }
-
-    state->start = state->stop = 0;
-
-    /// @todo read whole file in to start; later, read only a bit at a time
-    state->start += fread(state->buf, 1, state->stop += sizeof state->buf, state->file);
-
-    return rc;
-}
-
 static int compare_pairs(const void *a, const void *b)
 {
     int rc = 0;
@@ -97,14 +60,16 @@ static int compare_pairs(const void *a, const void *b)
     return rc;
 }
 
-struct node *hd_dispatch(const char *input, int *pos);
+struct node *hd_dispatch(struct lexer_state *state, int *pos);
 
-struct node *hd_handle_bool(const char *input, int *pos)
+struct node *hd_handle_bool(struct lexer_state *state, int *pos)
 {
     struct node *result = NULL;
 
+    const char *input = state->chunker(state->userdata, *pos, 3);
+
     char *next;
-    int intval = strtol(&input[*pos + 2], &next, 10);
+    int intval = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
         return PARSE_FAILURE;
@@ -112,28 +77,32 @@ struct node *hd_handle_bool(const char *input, int *pos)
 
     result = _alloc(sizeof *result);
     *result = (struct node){ .type = NODE_BOOL, .val = { .b = intval } };
-    (*pos) += next - (input + *pos);
+    (*pos) += next - input;
 
     return result;
 }
 
-struct node *hd_handle_hash(const char *input, int *pos)
+struct node *hd_handle_hash(struct lexer_state *state, int *pos)
 {
     struct node *result = NULL;
 
+    const char *input = state->chunker(state->userdata, *pos, 10);
+
     char *next;
-    int len = strtol(&input[*pos + 2], &next, 10);
+    int len = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
         return PARSE_FAILURE;
     }
 
-    (*pos) += next - (input + *pos) + 2; // 2 for ":}"
+    int inc = next - input + 2; // 2 for ":}"
+    (*pos) += inc;
+    input = state->chunker(state->userdata, *pos, inc);
 
     struct hashval *pairs = _alloc(len * sizeof *pairs);
     for (int i = 0; i < len; i++) {
-        pairs[i].key = hd_dispatch(input, pos);
-        pairs[i].val = hd_dispatch(input, pos);
+        pairs[i].key = hd_dispatch(state, pos);
+        pairs[i].val = hd_dispatch(state, pos);
     }
 
     // putting entries in order allows bsearch() on them
@@ -149,16 +118,21 @@ struct node *hd_handle_hash(const char *input, int *pos)
     return result;
 }
 
-struct node *hd_handle_string(const char *input, int *pos)
+struct node *hd_handle_string(struct lexer_state *state, int *pos)
 {
     struct node *result = NULL;
 
+    const char *input = state->chunker(state->userdata, *pos, 10);
+
     char *next;
-    int len = strtol(&input[*pos + 2], &next, 10);
+    int len = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
         return PARSE_FAILURE;
     }
+
+    (*pos) += next - input + 2; // 1 for colon, 1 for opening quote
+    input = state->chunker(state->userdata, *pos, len);
 
     char *val = _alloc(len + 1);
     /// @todo what about possibly escaped characters ?
@@ -171,18 +145,19 @@ struct node *hd_handle_string(const char *input, int *pos)
         .val = { .s = { .len = len, .val = val } }
     };
 
-    // 1 for colon, 2 for quotes
-    (*pos) += next - (input + *pos) + len + 1 + 2;
+    (*pos) += len + 1;  // 1 for closing quote
 
     return result;
 }
 
-struct node *hd_handle_int(const char *input, int *pos)
+struct node *hd_handle_int(struct lexer_state *state, int *pos)
 {
     struct node *result = NULL;
 
+    const char *input = state->chunker(state->userdata, *pos, 10);
+
     char *next;
-    long intval = strtol(&input[*pos + 2], &next, 10);
+    long intval = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
         return PARSE_FAILURE;
@@ -190,23 +165,37 @@ struct node *hd_handle_int(const char *input, int *pos)
 
     result = _alloc(sizeof *result);
     *result = (struct node){ .type = NODE_INT, .val = { .i = intval } };
-    (*pos) += next - (input + *pos);
+    (*pos) += next - input;
 
     return result;
 }
 
-struct node *hd_dispatch(const char *input, int *pos)
+struct node *hd_handle_null(struct lexer_state *state, int *pos)
 {
     struct node *result = NULL;
 
-    switch (input[*pos]) {
-        case NODE_BOOL:   result = hd_handle_bool  (input, pos); break;
-        case NODE_HASH:   result = hd_handle_hash  (input, pos); break;
-        case NODE_STRING: result = hd_handle_string(input, pos); break;
-        case NODE_INT:    result = hd_handle_int   (input, pos); break;
+    result = _alloc(sizeof *result);
+    *result = (struct node){ .type = NODE_NULL };
+    (*pos) += 1; // 'N'
+
+    return result;
+}
+
+struct node *hd_dispatch(struct lexer_state *state, int *pos)
+{
+    struct node *result = NULL;
+
+    const char *input = state->chunker(state->userdata, *pos, 1);
+
+    switch (input[0]) {
+        case NODE_BOOL:   result = hd_handle_bool  (state, pos); break;
+        case NODE_HASH:   result = hd_handle_hash  (state, pos); break;
+        case NODE_STRING: result = hd_handle_string(state, pos); break;
+        case NODE_INT:    result = hd_handle_int   (state, pos); break;
+        case NODE_NULL:   result = hd_handle_null  (state, pos); break;
 
         case '}':
-        case ';': (*pos)++; result = hd_dispatch(input, pos); break;
+        case ';': (*pos)++; result = hd_dispatch(state, pos); break;
 
         default: break;
     }
@@ -228,18 +217,17 @@ static int _hd_dump_recursive(const struct node *node, int level)
     less[sizeof less - 1] = 0;
 
     switch (node->type) {
-        case NODE_STRING: printf("\"%s\"", node->val.s.val); break;
-        case NODE_BOOL  : printf("%s"    , node->val.b ? "true" : "false");     break;
-        case NODE_INT   : printf("%ld"   , node->val.i);     break;
+        case NODE_STRING: printf("\"%s\"", node->val.s.val);                break;
+        case NODE_BOOL  : printf("%s"    , node->val.b ? "true" : "false"); break;
+        case NODE_INT   : printf("%ld"   , node->val.i);                    break;
+        case NODE_NULL  : printf("NULL");                                   break;
         case NODE_HASH  :
             fputs("{\n", stdout);
             for (int i = 0; i < node->val.a.len; i++) {
                 fputs(spaces, stdout);
                 rc = _hd_dump_recursive(node->val.a.pairs[i].key, level + 1);
-                //fputs(": key", stdout);
                 fputs(" = ", stdout);
                 rc = _hd_dump_recursive(node->val.a.pairs[i].val, level + 1);
-                //fputs(": val", stdout);
                 fputs("\n", stdout);
             }
 
@@ -273,11 +261,14 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    rc = hd_read_file(&state, argv[1]);
+    rc = hd_read_file_init(argv[1], &state.chunker, &state.userdata);
+
     int pos = 0;
-    struct node *result = hd_dispatch(state.buf, &pos);
+    struct node *result = hd_dispatch(&state, &pos);
 
     rc = hd_dump(result);
+
+    rc = hd_read_file_fini(state.userdata);
 
     return rc;
 }

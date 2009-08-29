@@ -10,6 +10,7 @@ my %map = (
     's' => \&string,
     'i' => \&integral,
     'b' => \&integral,
+    'N' => \&null,
     ';' => \&swallow,
 );
 
@@ -54,6 +55,11 @@ sub integral {
     my ($whole, undef, $val) = substr($_[0], ${ $_[1] }) =~ /^(([bi]):(\d+))/;
     ${ $_[1] } += length $whole;
     return $val;
+}
+
+sub null {
+    ${ $_[1] }++;
+    return undef;
 }
 
 sub swallow {
