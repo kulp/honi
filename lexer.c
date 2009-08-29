@@ -1,14 +1,18 @@
 #include "filestore.h"
 #include "lexer.h"
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <syck.h>
+#include <fcntl.h>
 
 #define PARSE_FAILURE ((void*)-1)
 
 struct lexer_state {
     chunker_t chunker;
     void *userdata;
+    int out_fd;
 };
 
 struct node {
@@ -187,7 +191,13 @@ struct node *hd_dispatch(struct lexer_state *state, int *pos)
 
     const char *input = state->chunker(state->userdata, *pos, 1);
 
-    switch (input[0]) {
+    int here = 0;
+    while (isspace(input[here]))
+        here++;
+
+    (*pos) += here;
+
+    switch (input[here]) {
         case NODE_BOOL:   result = hd_handle_bool  (state, pos); break;
         case NODE_HASH:   result = hd_handle_hash  (state, pos); break;
         case NODE_STRING: result = hd_handle_string(state, pos); break;
@@ -217,17 +227,21 @@ static int _hd_dump_recursive(const struct node *node, int level)
     less[sizeof less - 1] = 0;
 
     switch (node->type) {
-        case NODE_STRING: printf("\"%s\"", node->val.s.val);                break;
-        case NODE_BOOL  : printf("%s"    , node->val.b ? "true" : "false"); break;
-        case NODE_INT   : printf("%ld"   , node->val.i);                    break;
-        case NODE_NULL  : printf("NULL");                                   break;
+        case NODE_STRING: printf("s:%ld:\"%s\"", node->val.s.len, node->val.s.val); break;
+        case NODE_BOOL  : printf("b:%d"        , node->val.b);                      break;
+        case NODE_INT   : printf("i:%ld"       , node->val.i);                      break;
+        case NODE_NULL  : printf("N");                                              break;
         case NODE_HASH  :
-            fputs("{\n", stdout);
+            printf("a:%ld:{\n", node->val.a.len);
             for (int i = 0; i < node->val.a.len; i++) {
                 fputs(spaces, stdout);
                 rc = _hd_dump_recursive(node->val.a.pairs[i].key, level + 1);
-                fputs(" = ", stdout);
+                fputc(';', stdout);
                 rc = _hd_dump_recursive(node->val.a.pairs[i].val, level + 1);
+                // this is a hack (inconsistent format / space-saver -- feature
+                // or bug, depending on your point of view) -- not my idea !
+                if (i != node->val.a.len - 1 && node->val.a.pairs[i].val->type != NODE_HASH)
+                    fputc(';', stdout);
                 fputs("\n", stdout);
             }
 
@@ -250,25 +264,120 @@ int hd_dump(const struct node *node)
     return rc;
 }
 
+static void output_handler(SyckEmitter *e, char *ptr, long len)
+{
+    const struct lexer_state *state = e->bonus;
+    write(state->out_fd, ptr, len);
+}
+
+static void emitter_handler(SyckEmitter *e, st_data_t data)
+{
+    const struct node *node = (const struct node *)data;
+
+    enum { NONE, SCALAR, COLLECTION } mode = NONE;
+
+    char *what;
+    char tempbuf[10];
+    int len;
+    switch (node->type) {
+        case NODE_INT   :
+            mode = SCALAR;
+            len  = sprintf(what = tempbuf, "%ld", node->val.i);
+            break;
+        case NODE_BOOL  :
+            mode = SCALAR;
+            what = node->val.b ? "true" : "false";
+            len  = strlen(what);
+            break;
+        case NODE_STRING:
+            mode = SCALAR;
+            what = node->val.s.val;
+            len  = node->val.s.len;
+            break;
+        case NODE_NULL  :
+            mode = SCALAR;
+            what = NULL;
+            len = 0;
+            break;
+        case NODE_HASH  :
+            mode = COLLECTION;
+            syck_emit_map(e, NULL);
+
+            for (int i = 0; i < node->val.a.len; i++) {
+                syck_emit_item(e, (st_data_t)node->val.a.pairs[i].key);
+                syck_emit_item(e, (st_data_t)node->val.a.pairs[i].val);
+            }
+
+            syck_emit_end(e);
+            break;
+        default:
+            _err("Unrecognized node type '%d'", node->type);
+            return;
+    }
+
+    switch (mode) {
+        case SCALAR:
+            syck_emit_scalar(e, NULL, scalar_plain, 1, 1, 1, what, len);
+            break;
+        case COLLECTION:
+            /// @todo implement
+            break;
+        default:
+            _err("undefined YAML emit mode");
+            return;
+    }
+}
+
+int hd_yaml(const struct lexer_state *state, const struct node *node)
+{
+    int rc = 0;
+
+    SyckEmitter *e = syck_new_emitter();
+    e->bonus = (void*)state;
+
+    syck_output_handler (e, output_handler);
+    syck_emitter_handler(e, emitter_handler);
+
+    syck_emit(e, (st_data_t)node);
+    syck_emitter_flush(e, 0);
+
+    syck_free_emitter(e);
+
+    return rc;
+}
+
 int main(int argc, char *argv[])
 {
     int rc = 0;
 
     struct lexer_state state;
 
-    if (argc != 2) {
-        _err("Supply a filename");
+    if (argc < 2 || argc > 3) {
+        _err("Supply an input filename and an optional output filename");
         return EXIT_FAILURE;
     }
 
     rc = hd_read_file_init(argv[1], &state.chunker, &state.userdata);
 
+    if (argc == 2) {
+        state.out_fd = fileno(stdout);
+    } else {
+        state.out_fd = open(argv[2], O_WRONLY);
+        if (state.out_fd < 0) {
+            _err("Failed to open output file '%s'", argv[2]);
+            return EXIT_FAILURE;
+        }
+    }
+
     int pos = 0;
     struct node *result = hd_dispatch(&state, &pos);
 
-    rc = hd_dump(result);
+    //rc = hd_dump(result);
+    rc = hd_yaml(&state, result);
 
     rc = hd_read_file_fini(state.userdata);
+
+    close(state.out_fd);
 
     return rc;
 }
