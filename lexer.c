@@ -315,17 +315,9 @@ static void emitter_handler(SyckEmitter *e, st_data_t data)
             return;
     }
 
-    switch (mode) {
-        case SCALAR:
-            syck_emit_scalar(e, NULL, scalar_plain, 1, 1, 1, what, len);
-            break;
-        case COLLECTION:
-            /// @todo implement
-            break;
-        default:
-            _err("undefined YAML emit mode");
-            return;
-    }
+    if (mode == SCALAR)
+        syck_emit_scalar(e, NULL, scalar_plain, 1, 1, 1, what, len);
+    // if it's a COLLECTION, it has already been emitted
 }
 
 int hd_yaml(const struct lexer_state *state, const struct node *node)
@@ -358,11 +350,12 @@ int main(int argc, char *argv[])
     }
 
     rc = hd_read_file_init(argv[1], &state.chunker, &state.userdata);
+    if (rc) return EXIT_FAILURE;
 
     if (argc == 2) {
         state.out_fd = fileno(stdout);
     } else {
-        state.out_fd = open(argv[2], O_WRONLY);
+        state.out_fd = open(argv[2], O_WRONLY | O_CREAT);
         if (state.out_fd < 0) {
             _err("Failed to open output file '%s'", argv[2]);
             return EXIT_FAILURE;
