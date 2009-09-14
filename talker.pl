@@ -65,7 +65,7 @@ POE::Component::Client::TCP->new(
     Disconnected  => sub { say "disconnected"; },
     Connected     => \&connected,
     ServerInput   => \&server_input,
-    ServerFlushed => sub { say "server flushed"; },
+    #ServerFlushed => sub { say "server flushed"; },
     ServerError   => sub { say "server error"; },
     InlineStates => {
         check_user    => \&check_user,
@@ -94,6 +94,7 @@ sub _rpc
     return wantarray ? %$data : $data;
 }
 
+# TODO replace with a regular handler for 0x00 command code
 sub _check_login_response
 {
     my ($data) = @_;
@@ -147,12 +148,12 @@ sub _process_message
 
 sub my_presence
 {
-    say "my presence ACKed";
+    say "chat connection confirmed";
     my ($message) = @_;
     my ($code, $count) = unpack "C V", $message;
     for my $i (0 .. $count - 1) {
-        my ($id, $flags) = unpack "V v", substr($message, 4 + ($i * 6));#, 6);
-        say "id $id, flags $flags";
+        my ($id, $flags) = unpack "V v", substr($message, 5 + ($i * 6), 6);
+        printf "    id %u, flags %#x\n", $id, $flags;
     }
 }
 
@@ -163,23 +164,23 @@ sub channel_presence
     my ($channel, $chanid, undef, $welcome, $specials) = unpack "Z* V C Z* V", substr($message, 1);
     $pos += length($channel) + 1 + 4 + 1 + length($welcome) + 1 + 4;
     say "I ($user) am in channel '$channel'";
-    say "there are are $specials special users registered in this channel";
+    say "    special user(s) registered in this channel ($specials):";
 
     for my $i (0 .. $specials - 1) {
         my ($id, $flags) = unpack "V C",
                                 substr($message, $pos, 5);
-        printf "    special user id %u has flags 0x%x\n", $id, $flags;
+        printf "        special user id %u has flags %#x\n", $id, $flags;
         $pos += 5;
     }
 
     my ($count) = unpack "V", substr($message, $pos, 4);
     $pos += 4;
-    say "there are $count users in channel";
+    say "    there are $count users in channel";
 
     for my $i (0 .. $count - 1) {
         my ($name, $id, $flags) = unpack "Z* V v",
                                     substr($message, $pos);
-        printf "    name=%-16s, id=%7d, flags=0x%04x\n", $name, $id, $flags;
+        printf "        name=%-16s, id=%7d, flags=0x%04x\n", $name, $id, $flags;
         $pos += length($name) + 1 + 4 + 2;
     }
 }
@@ -212,7 +213,7 @@ sub whois_response
 
 sub ignore_message
 {
-    #printf "ignoring message code 0x%02x\n", ord shift;
+    #printf "ignoring message code %#02x\n", ord shift;
 }
 
 sub _dispatch
@@ -231,11 +232,8 @@ sub _dispatch
 sub connected
 {
     say "authenticating";
-
-    my $pre  = pack "V", $data->{account_id};
-    my $post = pack "V", 2;
-
-    $_[HEAP]{server}->put("\xff$pre$data->{cookie}\0$post");
+    my $auth = pack "C V Z* V", 0xff, $data->{account_id}, $data->{cookie}, 2;
+    $_[HEAP]{server}->put($auth);
 }
 
 sub server_input
@@ -246,7 +244,7 @@ sub server_input
     if ($_[HEAP]{recv_count}++ == 0) {
         _check_login_response($input);
 
-        $_[KERNEL]->yield('keepalive');
+        $_[KERNEL]->delay(keepalive => $keepalive_period);
         $_[KERNEL]->yield(join_channel => $home_channel);
     }
 
@@ -270,7 +268,7 @@ sub check_user
 sub keepalive
 {
     say "keepalive";
-    $_[KERNEL]->yield(check_user => $user);
+    $_[HEAP]{server}->put(chr 2);
     $_[KERNEL]->delay(keepalive => $keepalive_period);
 }
 
@@ -293,20 +291,14 @@ sub add_buddy
 sub join_channel
 {
     my ($heap, $chan) = @_[HEAP, ARG0];
-    my $server = $heap->{server};
-
     say "joining channel '$chan'";
-
-    $server->put("\x1e$chan\0");
+    $_[HEAP]{server}->put(pack "C Z*", 0x1E, $chan);
 }
 
 sub leave_channel
 {
     my ($heap, $chan) = @_[HEAP, ARG0];
-    my $server = $heap->{server};
-
     say "leaving channel '$chan'";
-
-    $server->put("\x22$chan\0");
+    $_[HEAP]{server}->put(pack "C Z*", 0x22, $chan);
 }
 
