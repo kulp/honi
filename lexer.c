@@ -41,7 +41,7 @@ struct node {
 };
 
 /// @todo write a more efficient chunking allocator
-static inline void* _alloc(size_t size)
+static inline void* hd_alloc(size_t size)
 {
     return malloc(size);
 }
@@ -56,10 +56,8 @@ static int compare_pairs(const void *a, const void *b)
     /// @todo support comparison of hash types ?
     // sort types separately (not mutually comparable usually anyway)
     rc = f->type - s->type;
-    if (!rc) {
-        if (f->type == NODE_STRING)
-            rc = strcmp(f->val.s.val, s->val.s.val);
-    }
+    if (!rc && f->type == NODE_STRING)
+        rc = strcmp(f->val.s.val, s->val.s.val);
 
     return rc;
 }
@@ -79,7 +77,7 @@ struct node *hd_handle_bool(struct lexer_state *state, int *pos)
         return PARSE_FAILURE;
     }
 
-    result = _alloc(sizeof *result);
+    result = hd_alloc(sizeof *result);
     *result = (struct node){ .type = NODE_BOOL, .val = { .b = intval } };
     (*pos) += next - input;
 
@@ -103,7 +101,7 @@ struct node *hd_handle_hash(struct lexer_state *state, int *pos)
     (*pos) += inc;
     input = state->chunker(state->userdata, *pos, inc);
 
-    struct hashval *pairs = _alloc(len * sizeof *pairs);
+    struct hashval *pairs = hd_alloc(len * sizeof *pairs);
     for (int i = 0; i < len; i++) {
         pairs[i].key = hd_dispatch(state, pos);
         pairs[i].val = hd_dispatch(state, pos);
@@ -112,7 +110,7 @@ struct node *hd_handle_hash(struct lexer_state *state, int *pos)
     // putting entries in order allows bsearch() on them
     qsort(pairs, len, sizeof *pairs, compare_pairs);
 
-    result = _alloc(sizeof *result);
+    result = hd_alloc(sizeof *result);
     *result = (struct node){
         .type = NODE_HASH,
         .val = { .a = { .len = len, .pairs = pairs } },
@@ -138,12 +136,12 @@ struct node *hd_handle_string(struct lexer_state *state, int *pos)
     (*pos) += next - input + 2; // 1 for colon, 1 for opening quote
     input = state->chunker(state->userdata, *pos, len);
 
-    char *val = _alloc(len + 1);
+    char *val = hd_alloc(len + 1);
     /// @todo what about possibly escaped characters ?
     strncpy(val, next + 2, len);
     val[len] = 0;
 
-    result = _alloc(sizeof *result);
+    result = hd_alloc(sizeof *result);
     *result = (struct node){
         .type = NODE_STRING,
         .val = { .s = { .len = len, .val = val } }
@@ -167,7 +165,7 @@ struct node *hd_handle_int(struct lexer_state *state, int *pos)
         return PARSE_FAILURE;
     }
 
-    result = _alloc(sizeof *result);
+    result = hd_alloc(sizeof *result);
     *result = (struct node){ .type = NODE_INT, .val = { .i = intval } };
     (*pos) += next - input;
 
@@ -178,7 +176,7 @@ struct node *hd_handle_null(struct lexer_state *state, int *pos)
 {
     struct node *result = NULL;
 
-    result = _alloc(sizeof *result);
+    result = hd_alloc(sizeof *result);
     *result = (struct node){ .type = NODE_NULL };
     (*pos) += 1; // 'N'
 
@@ -207,7 +205,7 @@ struct node *hd_dispatch(struct lexer_state *state, int *pos)
         case '}':
         case ';': (*pos)++; result = hd_dispatch(state, pos); break;
 
-        default: break;
+        default: break; /// @todo report error condition
     }
 
     return result;
