@@ -3,6 +3,8 @@ use strict;
 use warnings;
 use feature 'say';
 
+package Fortyn;
+
 use Data::HexDump;
 use Digest::MD5 qw(md5_hex);
 use IO::Socket::INET;
@@ -26,61 +28,89 @@ my $home_channel = "UWEC";
 my ($user, $pass) = @ARGV;
 $user and $pass or die "Supply username and password";
 
+# TODO move into object
 my $ua = LWP::UserAgent->new;
 
 ################################################################################
 
 my %actions = (
-    0x00 => sub { say "login successful" },
-    0x04 => \&channel_presence,
-    0x0B => \&my_presence,
-    0x2D => \&whois_response,
-    0x03 => \&channel_traffic,
+    0x00 => 'login_success',
+    0x04 => 'channel_presence',
+    0x0B => 'my_presence',
+    0x2D => 'whois_response',
+    0x03 => 'channel_traffic',
 
-    0x05 => \&ignore_message,
-    0x06 => \&ignore_message,
-    0x0C => \&ignore_message,
-    0x18 => \&ignore_message,
+    0x05 => 'ignore_message',
+    0x06 => 'ignore_message',
+    0x0C => 'ignore_message',
+    0x18 => 'ignore_message',
 );
 
 ################################################################################
 
-my $data = _rpc(auth => login => $user, password => md5_hex($pass));
-
-die "Error: $data->{auth}\n" if $data->{auth};
-
-my $chatter = $data->{chat_url};
-my $port = 11031;
-
-say "Got chat server address $chatter:$port";
-#say "Sleeping a few seconds to allow database quiescence";
-#sleep 1;
-say "Connecting to chat server at $chatter";
-
-POE::Component::Client::TCP->new(
-    RemoteAddress => $chatter,
-    RemotePort    => $port,
-    # Prevent input buffering
-    Filter        => "POE::Filter::Stream",
-    Disconnected  => sub { say "disconnected"; },
-    Connected     => \&connected,
-    ServerInput   => \&server_input,
-    #ServerFlushed => sub { say "server flushed"; },
-    ServerError   => sub { say "server error"; },
-    InlineStates => {
-        check_user    => \&check_user,
-        add_buddy     => \&add_buddy,
-        keepalive     => \&keepalive,
-        join_channel  => \&join_channel,
-        leave_channel => \&leave_channel,
-    },
-);
-
+my $client = Fortyn->new;
 POE::Kernel->run();
 exit;
 
+################################# M E T H O D S ################################
+#
+sub new
+{
+    my $class = shift;
+    my $self = bless {
+        @_,
+        recv_count => 0,
+    } => $class;
+
+    my $data = $self->{data} = _rpc(auth => login => $user, password => md5_hex($pass));
+
+    die "Error: $data->{auth}\n" if $data->{auth};
+
+    my $chatter = $data->{chat_url};
+    my $port = 11031;
+
+    say "Got chat server address $chatter:$port";
+    say "Connecting to chat server at $chatter";
+
+    POE::Component::Client::TCP->new(
+        RemoteAddress => $chatter,
+        RemotePort    => $port,
+        # Prevent input buffering
+        Filter        => "POE::Filter::Stream",
+        Disconnected  => sub { say "disconnected"; },
+        Connected     => sub { $_[KERNEL]->yield(connected    => @_[ARG0 .. $#_]) },
+        ServerInput   => sub { $_[KERNEL]->yield(server_input => @_[ARG0 .. $#_]) },
+        #ServerFlushed => sub { say "server flushed"; },
+        ServerError   => sub { say "server error"; },
+        ObjectStates  => [
+            $self => [ qw(
+                _check_login_response
+                _process_message
+                _dispatch
+
+                add_buddy
+                channel_presence
+                channel_traffic
+                check_user
+                connected
+                ignore_message
+                join_channel
+                keepalive
+                leave_channel
+                login_success
+                my_presence
+                server_input
+                whois_response
+            ) ],
+        ],
+    );
+
+    return $self;
+}
+
 ############################ U T I L I T Y   S U B S ###########################
 
+# TODO convert to an event ?
 sub _rpc
 {
     my ($method, @args) = @_;
@@ -97,10 +127,8 @@ sub _rpc
 # TODO replace with a regular handler for 0x00 command code
 sub _check_login_response
 {
-    my ($data) = @_;
-    if (length($data) == 5 && $data eq pack "H*", "0100000000") {
-        return 0;
-    } else {
+    my ($self, $kernel, $data) = @_[OBJECT, KERNEL, ARG0];
+    if (length($data) != 5 || $data ne pack "H*", "0100000000") {
         die "Unexpected login response packet";
     }
 }
@@ -135,21 +163,26 @@ sub _seq_num
 }
 }
 
+# TODO move newly-minted events to their own section, away from these so-called
+# "utility subs"
 # eats a message from a string and calls the passed sub on it
 sub _process_message
 {
-    my ($messages, $code) = @_;
-    my ($len) = unpack "V", $messages;
-    my $this = substr($messages, 4, $len);
-    $_[0]    = substr($messages, $len + 4);
+    my ($self, $kernel, $msgref, $code) = @_[OBJECT, KERNEL, ARG0, ARG1];
 
-    return $code->($this);
+    die "Login failed" if $self->{recv_count} > 1 && !$self->{logged_in};
+
+    my ($len) = unpack "V", $$msgref;
+    my $this = substr($$msgref, 4, $len);
+    $$msgref = substr($$msgref, $len + 4);
+
+    $kernel->yield($code => $this);
 }
 
 sub my_presence
 {
     say "chat connection confirmed";
-    my ($message) = @_;
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my ($code, $count) = unpack "C V", $message;
     for my $i (0 .. $count - 1) {
         my ($id, $flags) = unpack "V v", substr($message, 5 + ($i * 6), 6);
@@ -159,7 +192,7 @@ sub my_presence
 
 sub channel_presence
 {
-    my ($message) = @_;
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my $pos = 1; # skip code
     my ($channel, $chanid, undef, $welcome, $specials) = unpack "Z* V C Z* V", substr($message, 1);
     $pos += length($channel) + 1 + 4 + 1 + length($welcome) + 1 + 4;
@@ -187,7 +220,7 @@ sub channel_presence
 
 sub channel_traffic
 {
-    my ($message) = @_;
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my ($userid, $chanid, $saying) = unpack "x V V Z*", $message;
     say "user id $userid said in channel id $chanid : '$saying'";
 }
@@ -195,7 +228,7 @@ sub channel_traffic
 sub whois_response
 {
     say "whois reponse";
-    my ($message) = @_;
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my $pos = 0;
     my ($code, $name) = unpack "C Z*", $message;
     $pos += 1 + length($name) + 1;
@@ -218,38 +251,43 @@ sub ignore_message
 
 sub _dispatch
 {
-    my ($message) = @_;
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my $key = ord $message;
     if (my $code = $actions{$key}) {
-        return $code->($message);
+        $kernel->yield($code, $message);
     } else {
         print HexDump($message);
     }
 }
 
-######################### T C P   C L I E N T   S U B S ########################
+sub login_success
+{
+    my ($self, $kernel) = @_[OBJECT, KERNEL];
+    say "login successful";
+    $self->{logged_in} = 1;
+}
 
 sub connected
 {
+    my ($self, $kernel, $heap) = @_[OBJECT, KERNEL, HEAP];
     say "authenticating";
-    my $auth = pack "C V Z* V", 0xff, $data->{account_id}, $data->{cookie}, 2;
-    $_[HEAP]{server}->put($auth);
+    my $auth = pack "C V Z* V", 0xff, $self->{data}{account_id}, $self->{data}{cookie}, 2;
+    ($self->{tcp} ||= $heap->{server})->put($auth);
 }
 
 sub server_input
 {
-    my $input = $_[ARG0];
-    #say "packet received";
+    my ($self, $kernel, $input) = @_[OBJECT, KERNEL, ARG0];
+    say "packet received ($self->{recv_count})";
 
-    if ($_[HEAP]{recv_count}++ == 0) {
-        _check_login_response($input);
-
-        $_[KERNEL]->delay(keepalive => $keepalive_period);
-        $_[KERNEL]->yield(join_channel => $home_channel);
+    if ($self->{recv_count}++ == 0) {
+        $kernel->delay(keepalive => $keepalive_period);
+        $kernel->yield(join_channel => $home_channel);
     }
 
     while (length($input) > 0) {
-        _process_message($input, \&_dispatch);
+        $kernel->call($_[SESSION], _process_message => \$input, '_dispatch');
+        die $! if $!;
     }
 }
 
@@ -257,8 +295,8 @@ sub server_input
 
 sub check_user
 {
-    my ($heap, $user) = @_[HEAP, ARG0];
-    my $server = $heap->{server};
+    my ($self, $kernel, $user) = @_[OBJECT, KERNEL, ARG0];
+    my $server = $self->{tcp};
 
     say "checking user $user";
 
@@ -267,15 +305,16 @@ sub check_user
 
 sub keepalive
 {
+    my ($self, $kernel) = @_[OBJECT, KERNEL];
     say "keepalive";
-    $_[HEAP]{server}->put(chr 2);
-    $_[KERNEL]->delay(keepalive => $keepalive_period);
+    $self->{tcp}->put(chr 2);
+    $kernel->delay(keepalive => $keepalive_period);
 }
 
 sub add_buddy
 {
-    my ($heap, $buddy) = @_[HEAP, ARG0];
-    my $server = $heap->{server};
+    my ($self, $kernel, $buddy) = @_[OBJECT, KERNEL, ARG0];
+    my $server = $self->{tcp};
 
     say "adding buddy $buddy";
 
@@ -290,15 +329,15 @@ sub add_buddy
 
 sub join_channel
 {
-    my ($heap, $chan) = @_[HEAP, ARG0];
+    my ($self, $kernel, $chan) = @_[OBJECT, KERNEL, ARG0];
     say "joining channel '$chan'";
-    $_[HEAP]{server}->put(pack "C Z*", 0x1E, $chan);
+    $self->{tcp}->put(pack "C Z*", 0x1E, $chan);
 }
 
 sub leave_channel
 {
-    my ($heap, $chan) = @_[HEAP, ARG0];
+    my ($self, $kernel, $chan) = @_[OBJECT, KERNEL, ARG0];
     say "leaving channel '$chan'";
-    $_[HEAP]{server}->put(pack "C Z*", 0x22, $chan);
+    $self->{tcp}->put(pack "C Z*", 0x22, $chan);
 }
 
