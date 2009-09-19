@@ -10,8 +10,6 @@
 #include <syck.h>
 #include <unistd.h>
 
-#define PARSE_FAILURE ((void*)-1)
-
 #define _err(...) do { \
     fprintf(stderr, __VA_ARGS__); \
     fprintf(stderr, "\n"); \
@@ -81,7 +79,7 @@ static struct node *hd_handle_bool(struct hd_parser_state *state, int *pos)
     int intval = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
-        return PARSE_FAILURE;
+        return HD_PARSE_FAILURE;
     }
 
     result = hd_alloc(sizeof *result);
@@ -101,7 +99,7 @@ static struct node *hd_handle_hash(struct hd_parser_state *state, int *pos)
     int len = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
-        return PARSE_FAILURE;
+        return HD_PARSE_FAILURE;
     }
 
     int inc = next - input + 2; // 2 for ":}"
@@ -137,7 +135,7 @@ static struct node *hd_handle_string(struct hd_parser_state *state, int *pos)
     int len = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
-        return PARSE_FAILURE;
+        return HD_PARSE_FAILURE;
     }
 
     (*pos) += next - input + 2; // 1 for colon, 1 for opening quote
@@ -169,7 +167,7 @@ static struct node *hd_handle_int(struct hd_parser_state *state, int *pos)
     long intval = strtol(&input[2], &next, 10);
     if (next == input) {
         _err("Parse failure in %s", __func__);
-        return PARSE_FAILURE;
+        return HD_PARSE_FAILURE;
     }
 
     result = hd_alloc(sizeof *result);
@@ -212,7 +210,9 @@ static struct node *hd_dispatch(struct hd_parser_state *state, int *pos)
         case '}':
         case ';': (*pos)++; result = hd_dispatch(state, pos); break;
 
-        default: break; /// @todo report error condition
+        default:
+            _err("Parse failure in %s", __func__);
+            return HD_PARSE_FAILURE;
     }
 
     return result;

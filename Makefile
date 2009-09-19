@@ -1,15 +1,16 @@
-DEFINES += _POSIX_C_SOURCE
-CFLAGS  += -std=c99 -W -Wall -Werror -Wextra -pedantic-errors $(addprefix -D,$(DEFINES))
-# for debugging only
-CFLAGS  += -g3 -Wno-unused
+DEFINES += _POSIX_C_SOURCE=200112L
+CFLAGS  += -std=c99 -W -Wall -Werror -Wextra -pedantic-errors \
+		   $(addprefix -D,$(DEFINES)) -Wno-unused-parameter
+CFLAGS  += -g # for debugging only
 LDLIBS  += -lsyck
 CFILES  += $(wildcard *.c)
+TARGETS += hd2yaml
 
-all: hd2yaml
+all: $(TARGETS)
 
 hd2yaml: hd2yaml.o hd_parser.o filestore.o
 
-CLEANFILES += hd2yaml *.[od]
+CLEANFILES += $(TARGETS) *.[od]
 
 .PHONY: clean
 clean:
