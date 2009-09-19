@@ -3,7 +3,8 @@
 
 #include <ctype.h>
 #include <fcntl.h>
-#include <stdbool.h>
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <syck.h>
@@ -67,6 +68,8 @@ void hd_free(struct node* node)
             }
             free(node->val.a.pairs);
             break;
+        default:
+            _err("Invalid node type %d in %s", node->type, __func__);
     };
 
     free(node);
@@ -237,8 +240,23 @@ static struct node *hd_dispatch(struct hd_parser_state *state, int *pos)
     return result;
 }
 
+/// portable version of GNU dprintf()
+static int _fdprintf(int fd, const char *fmt, ...)
+{
+    va_list vl;
+    va_start(vl, fmt);
+    int size = vsnprintf(NULL, 0, fmt, vl);
+    va_end(vl);
+    va_start(vl, fmt);
+    char buf[size + 1];
+    int result = vsnprintf(buf, size + 1, fmt, vl);
+    write(fd, buf, size);
+    va_end(vl);
+    return result;
+}
+
 #define INDENT_SIZE 4
-static int _hd_dump_recursive(const struct node *node, int level)
+static int _hd_dump_recursive(int fd, const struct node *node, int level, int flags)
 {
     int rc = 0;
 
@@ -251,26 +269,29 @@ static int _hd_dump_recursive(const struct node *node, int level)
     less[sizeof less - 1] = 0;
 
     switch (node->type) {
-        case NODE_STRING: printf("s:%ld:\"%s\"", node->val.s.len, node->val.s.val); break;
-        case NODE_BOOL  : printf("b:%d"        , node->val.b);                      break;
-        case NODE_INT   : printf("i:%ld"       , node->val.i);                      break;
-        case NODE_NULL  : printf("N");                                              break;
+        case NODE_STRING: _fdprintf(fd, "s:%ld:\"%s\"", node->val.s.len, node->val.s.val); break;
+        case NODE_BOOL  : _fdprintf(fd, "b:%d"        , node->val.b);                      break;
+        case NODE_INT   : _fdprintf(fd, "i:%ld"       , node->val.i);                      break;
+        case NODE_NULL  : _fdprintf(fd, "N");                                              break;
         case NODE_HASH  :
-            printf("a:%ld:{\n", node->val.a.len);
+            _fdprintf(fd, "a:%ld:{%s", node->val.a.len, flags & HD_PRINT_PRETTY ? "\n" : "");
             for (int i = 0; i < node->val.a.len; i++) {
-                fputs(spaces, stdout);
-                rc = _hd_dump_recursive(node->val.a.pairs[i].key, level + 1);
-                fputc(';', stdout);
-                rc = _hd_dump_recursive(node->val.a.pairs[i].val, level + 1);
+                if (flags & HD_PRINT_PRETTY)
+                    write(fd, spaces, sizeof spaces - 1);
+                rc = _hd_dump_recursive(fd, node->val.a.pairs[i].key, level + 1, flags);
+                write(fd, ";", 1);
+                rc = _hd_dump_recursive(fd, node->val.a.pairs[i].val, level + 1, flags);
                 // this is a hack (inconsistent format / space-saver -- feature
                 // or bug, depending on your point of view) -- not my idea !
                 if (i != node->val.a.len - 1 && node->val.a.pairs[i].val->type != NODE_HASH)
-                    fputc(';', stdout);
-                fputs("\n", stdout);
+                    write(fd, ";", 1);
+                if (flags & HD_PRINT_PRETTY)
+                    write(fd, "\n", 1);
             }
 
-            fputs(less, stdout);
-            fputs("}", stdout);
+            if (flags & HD_PRINT_PRETTY)
+                write(fd, less, sizeof less - 1);
+            write(fd, "}", 1);
             break;
         default: return -1;
     }
@@ -280,8 +301,7 @@ static int _hd_dump_recursive(const struct node *node, int level)
 
 static void output_handler(SyckEmitter *e, char *ptr, long len)
 {
-    const struct hd_parser_state *state = e->bonus;
-    write(state->out_fd, ptr, len);
+    write((uintptr_t)e->bonus, ptr, len);
 }
 
 static void emitter_handler(SyckEmitter *e, st_data_t data)
@@ -353,17 +373,6 @@ int hd_fini(struct hd_parser_state **state)
     return 0;
 }
 
-int hd_get_out_fd(struct hd_parser_state *state)
-{
-    return state->out_fd;
-}
-
-int hd_set_out_fd(struct hd_parser_state *state, int out_fd)
-{
-    state->out_fd = out_fd;
-    return out_fd >= 0;
-}
-
 void* hd_get_userdata(struct hd_parser_state *state)
 {
     return state->userdata;
@@ -392,12 +401,14 @@ struct node *hd_parse(struct hd_parser_state *state)
     return hd_dispatch(state, &pos);
 }
 
-int hd_yaml(const struct hd_parser_state *state, const struct node *node)
+int hd_yaml(int fd, const struct node *node, int flags)
 {
     int rc = 0;
 
+    /// @todo use @p flags
+
     SyckEmitter *e = syck_new_emitter();
-    e->bonus = (void*)state;
+    e->bonus = (void*)(uintptr_t)fd;
 
     syck_output_handler (e, output_handler);
     syck_emitter_handler(e, emitter_handler);
@@ -410,12 +421,12 @@ int hd_yaml(const struct hd_parser_state *state, const struct node *node)
     return rc;
 }
 
-int hd_dump(const struct node *node)
+int hd_dump(int fd, const struct node *node, int flags)
 {
     int rc = 0;
 
-    rc = _hd_dump_recursive(node, 0);
-    fputc('\n', stdout);
+    rc = _hd_dump_recursive(fd, node, 0, flags);
+    write(fd, "\n", 1);
 
     return rc;
 }

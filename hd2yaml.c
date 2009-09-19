@@ -25,19 +25,19 @@ int main(int argc, char *argv[])
     rc = hd_read_file_init(state, argv[1]);
     if (rc) return EXIT_FAILURE;
 
+    int fd = -1;
     if (argc == 2) {
-        hd_set_out_fd(state, fileno(stdout));
+        fd = fileno(stdout);
     } else {
-        int fd = open(argv[2], O_WRONLY | O_CREAT);
+        fd = open(argv[2], O_WRONLY | O_CREAT | O_TRUNC, 0666);
         if (fd < 0) {
             fprintf(stderr, "Failed to open output file '%s'\n", argv[2]);
             return EXIT_FAILURE;
         }
-        hd_set_out_fd(state, fd);
     }
 
     struct node *result = hd_parse(state);
-    rc = hd_yaml(state, result);
+    rc = hd_yaml(fd, result, 0);
     rc = hd_read_file_fini(state);
     rc = hd_fini(&state);
     hd_free(result);
