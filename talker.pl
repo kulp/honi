@@ -23,7 +23,7 @@ my $base = qq(http://masterserver.hon.s2games.com);
 my $cr_url = qq($base/client_requester.php);
 
 my $keepalive_period = 30;  # seconds
-my $home_channel = "UWEC";
+my @abide = qw(UWEC);
 
 my ($user, $pass) = @ARGV;
 $user and $pass or die "Supply username and password";
@@ -40,25 +40,26 @@ my %actions = (
     0x2D => 'whois_response',
     0x03 => 'channel_traffic',
 
-    0x05 => 'ignore_message',
-    0x06 => 'ignore_message',
-    0x0C => 'ignore_message',
-    0x18 => 'ignore_message',
+#    0x05 => 'ignore_message',
+#    0x06 => 'ignore_message',
+#    0x0C => 'ignore_message',
+#    0x18 => 'ignore_message',
 );
 
-################################################################################
+######################### P O E   E N T R Y   P O I N T ########################
 
-my $client = Fortyn->new;
+my $client = Fortyn->new(abide => \@abide);
 POE::Kernel->run();
 exit;
 
 ################################# M E T H O D S ################################
-#
+
 sub new
 {
-    my $class = shift;
+    my ($class, %args) = @_;
     my $self = bless {
-        @_,
+        abide => { map { lc $_ => 1 } @{ delete $args{abide} || [] } },
+        %args,
         recv_count => 0,
     } => $class;
 
@@ -69,22 +70,21 @@ sub new
     my $chatter = $data->{chat_url};
     my $port = 11031;
 
-    say "Got chat server address $chatter:$port";
-    say "Connecting to chat server at $chatter";
+    say "got chat server address $chatter";
+    say "connecting to chat server at $chatter:$port";
 
     POE::Component::Client::TCP->new(
         RemoteAddress => $chatter,
         RemotePort    => $port,
         # Prevent input buffering
         Filter        => "POE::Filter::Stream",
-        Disconnected  => sub { say "disconnected"; },
+        Disconnected  => sub { die "disconnected"; },
         Connected     => sub { $_[KERNEL]->yield(connected    => @_[ARG0 .. $#_]) },
         ServerInput   => sub { $_[KERNEL]->yield(server_input => @_[ARG0 .. $#_]) },
         #ServerFlushed => sub { say "server flushed"; },
         ServerError   => sub { say "server error"; },
         ObjectStates  => [
             $self => [ qw(
-                _check_login_response
                 _process_message
                 _dispatch
 
@@ -108,38 +108,15 @@ sub new
     return $self;
 }
 
-############################ U T I L I T Y   S U B S ###########################
-
-# TODO convert to an event ?
-sub _rpc
-{
-    my ($method, @args) = @_;
-    my $response = $ua->post($cr_url, {
-        f => $method,
-        @args,
-    });
-
-    my $data = lex($response->content);
-    delete $data->{0}; # I don't understand this extra top-level key
-    return wantarray ? %$data : $data;
-}
-
-# TODO replace with a regular handler for 0x00 command code
-sub _check_login_response
-{
-    my ($self, $kernel, $data) = @_[OBJECT, KERNEL, ARG0];
-    if (length($data) != 5 || $data ne pack "H*", "0100000000") {
-        die "Unexpected login response packet";
-    }
-}
-
-{ my %cache; # cached names
 sub _nick2id
 {
+    my $self = shift;
+    my $cache = $self->{nick2id};
+
     my $i = 0;
-    my @need = grep !$cache{$_}, @_;
-    my @have = grep  $cache{$_}, @_;
-    my %results = mesh @have, @{[ @cache{@have} ]};
+    my @need = grep !$cache->{$_}, @_;
+    my @have = grep  $cache->{$_}, @_;
+    my %results = mesh @have, @{[ @$cache{@have} ]};
     if (@need) {
         %results = (
             %results,
@@ -147,21 +124,22 @@ sub _nick2id
         );
     }
 
+    # TODO use Contextual::Return here
     return \%results;
 }
-}
 
-{ my $seq;
 # I'm not sure what the purpose of this sequence number is, or even if it is
 # a sequence number, but it appears to be a monotonically increasing
 # non-time-linear sequence that is used at least for buddy management. We fake
 # one.
 sub _seq_num
 {
-    $seq ||= time - 1234567890;
-    return $seq += 2;
+    my $self = shift;
+    $self->{seq} ||= time - 1234567890;
+    return $self->{seq} += 2;
 }
-}
+
+################################## E V E N T S #################################
 
 # TODO move newly-minted events to their own section, away from these so-called
 # "utility subs"
@@ -195,6 +173,10 @@ sub channel_presence
     my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my $pos = 1; # skip code
     my ($channel, $chanid, undef, $welcome, $specials) = unpack "Z* V C Z* V", substr($message, 1);
+
+    $self->{chan2id}{$channel} = $chanid;
+    $self->{id2chan}{$chanid}  = $channel;
+
     $pos += length($channel) + 1 + 4 + 1 + length($welcome) + 1 + 4;
     say "I ($user) am in channel '$channel'";
     say "    special user(s) registered in this channel ($specials):";
@@ -213,16 +195,24 @@ sub channel_presence
     for my $i (0 .. $count - 1) {
         my ($name, $id, $flags) = unpack "Z* V v",
                                     substr($message, $pos);
+
+        $self->{nick2id}{$name} = $id;
+        $self->{id2nick}{$id}   = $name;
+
         printf "        name=%-16s, id=%7d, flags=0x%04x\n", $name, $id, $flags;
         $pos += length($name) + 1 + 4 + 2;
     }
+
+    $kernel->yield(leave_channel => $channel) unless $self->{abide}{lc $channel}
 }
 
 sub channel_traffic
 {
     my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my ($userid, $chanid, $saying) = unpack "x V V Z*", $message;
-    say "user id $userid said in channel id $chanid : '$saying'";
+    my $who   = $self->{id2nick}{$userid} || "id $userid";
+    my $where = $self->{id2chan}{$chanid} || "id $chanid";
+    say "user $who said in channel $where : '$saying'";
 }
 
 sub whois_response
@@ -278,11 +268,11 @@ sub connected
 sub server_input
 {
     my ($self, $kernel, $input) = @_[OBJECT, KERNEL, ARG0];
-    say "packet received ($self->{recv_count})";
+    #say "packet received ($self->{recv_count})";
 
     if ($self->{recv_count}++ == 0) {
         $kernel->delay(keepalive => $keepalive_period);
-        $kernel->yield(join_channel => $home_channel);
+        $kernel->yield(join_channel => $_) for keys %{ $self->{abide} };
     }
 
     while (length($input) > 0) {
@@ -290,8 +280,6 @@ sub server_input
         die $! if $!;
     }
 }
-
-############################## P O E   E V E N T S #############################
 
 sub check_user
 {
@@ -318,8 +306,8 @@ sub add_buddy
 
     say "adding buddy $buddy";
 
-    my $id = _nick2id($buddy)->{$buddy};
-    my $seq = _seq_num();
+    my $id = $self->_nick2id($buddy)->{$buddy};
+    my $seq = $self->_seq_num();
     # YAUBS
     my $packed = pack "C V V V", 0x0d, $id, $seq, $seq + 1;
     warn HexDump($packed);
@@ -331,6 +319,7 @@ sub join_channel
 {
     my ($self, $kernel, $chan) = @_[OBJECT, KERNEL, ARG0];
     say "joining channel '$chan'";
+    $self->{abide}{lc $chan} = 1;
     $self->{tcp}->put(pack "C Z*", 0x1E, $chan);
 }
 
@@ -339,5 +328,21 @@ sub leave_channel
     my ($self, $kernel, $chan) = @_[OBJECT, KERNEL, ARG0];
     say "leaving channel '$chan'";
     $self->{tcp}->put(pack "C Z*", 0x22, $chan);
+}
+
+############################ U T I L I T Y   S U B S ###########################
+
+# TODO convert to an event ?
+sub _rpc
+{
+    my ($method, @args) = @_;
+    my $response = $ua->post($cr_url, {
+        f => $method,
+        @args,
+    });
+
+    my $data = lex($response->content);
+    delete $data->{0}; # I don't understand this extra top-level key
+    return wantarray ? %$data : $data;
 }
 
