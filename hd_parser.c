@@ -48,30 +48,9 @@ struct node {
 };
 
 /// @todo write a more efficient chunking allocator
-void* hd_alloc(size_t size)
+static void* hd_alloc(size_t size)
 {
     return malloc(size);
-}
-
-void hd_free(struct node* node)
-{
-    switch (node->type) {
-        case NODE_BOOL   : 
-        case NODE_INT    : 
-        case NODE_NULL   :                           break;
-        case NODE_STRING : free(node->val.s.val);    break;
-        case NODE_HASH   :
-            for (int i = 0; i < node->val.a.len; i++) {
-                hd_free(node->val.a.pairs[i].key);
-                hd_free(node->val.a.pairs[i].val);
-            }
-            free(node->val.a.pairs);
-            break;
-        default:
-            _err("Invalid node type %d in %s", node->type, __func__);
-    };
-
-    free(node);
 }
 
 static int compare_pairs(const void *a, const void *b)
@@ -427,6 +406,27 @@ int hd_dump(int fd, const struct node *node, int flags)
     write(fd, "\n", 1);
 
     return rc;
+}
+
+void hd_free(struct node* node)
+{
+    switch (node->type) {
+        case NODE_BOOL   : 
+        case NODE_INT    : 
+        case NODE_NULL   :                           break;
+        case NODE_STRING : free(node->val.s.val);    break;
+        case NODE_HASH   :
+            for (int i = 0; i < node->val.a.len; i++) {
+                hd_free(node->val.a.pairs[i].key);
+                hd_free(node->val.a.pairs[i].val);
+            }
+            free(node->val.a.pairs);
+            break;
+        default:
+            _err("Invalid node type %d in %s", node->type, __func__);
+    };
+
+    free(node);
 }
 
 /* vim:set ts=4 sw=4 syntax=c.doxygen: */

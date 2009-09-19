@@ -65,7 +65,6 @@ int hd_yaml(int fd, const struct node *node, int flags);
  */
 int hd_dump(int fd, const struct node *node, int flags);
 
-void* hd_alloc(size_t size);
 void hd_free(struct node* ptr);
 
 #endif /* HD_PARSER_H_ */
