@@ -20,7 +20,6 @@
 struct hd_parser_state {
     chunker_t chunker;
     void *userdata;
-    int out_fd;
 };
 
 struct node {
@@ -367,7 +366,6 @@ int hd_init(struct hd_parser_state **state)
 int hd_fini(struct hd_parser_state **state)
 {
     if (!state) return -1;
-    close((*state)->out_fd);
     free(*state);
     *state = NULL;
     return 0;
