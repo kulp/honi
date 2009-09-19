@@ -5,8 +5,13 @@
 #include <stddef.h>
 
 struct hd_parser_state;
+struct node;
+
+typedef int (*hd_dumper_t)(int fd, const struct node *node, int flags);
 
 #define HD_PRINT_PRETTY 1
+
+#define HD_PARSE_FAILURE ((void*)-1)
 
 /**
  * Called to initialize an opaque HoNData parser state.
@@ -38,7 +43,7 @@ int hd_set_userdata(struct hd_parser_state *state, void *data);
  *
  * @param state the parser state
  *
- * @return a @c node or @c NULL on undifferentiated error
+ * @return a @c node or @c HD_PARSE_FAILURE on undifferentiated error
  */
 struct node *hd_parse(struct hd_parser_state *state);
 
