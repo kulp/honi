@@ -1,15 +1,22 @@
-#include "filestore.h"
-#include "lexer.h"
+#include "hd_parser.h"
+#include "hd_parser_store.h"
 
 #include <ctype.h>
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdlib.h>
+#include <string.h>
 #include <syck.h>
-#include <fcntl.h>
+#include <unistd.h>
 
 #define PARSE_FAILURE ((void*)-1)
 
-struct lexer_state {
+#define _err(...) do { \
+    fprintf(stderr, __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
+} while (0)
+
+struct hd_parser_state {
     chunker_t chunker;
     void *userdata;
     int out_fd;
@@ -46,6 +53,12 @@ static inline void* hd_alloc(size_t size)
     return malloc(size);
 }
 
+/// @todo write matching deallocator
+static inline void hd_free(void* ptr)
+{
+    free(ptr);
+}
+
 static int compare_pairs(const void *a, const void *b)
 {
     int rc = 0;
@@ -62,9 +75,9 @@ static int compare_pairs(const void *a, const void *b)
     return rc;
 }
 
-struct node *hd_dispatch(struct lexer_state *state, int *pos);
+static struct node *hd_dispatch(struct hd_parser_state *state, int *pos);
 
-struct node *hd_handle_bool(struct lexer_state *state, int *pos)
+static struct node *hd_handle_bool(struct hd_parser_state *state, int *pos)
 {
     struct node *result = NULL;
 
@@ -84,7 +97,7 @@ struct node *hd_handle_bool(struct lexer_state *state, int *pos)
     return result;
 }
 
-struct node *hd_handle_hash(struct lexer_state *state, int *pos)
+static struct node *hd_handle_hash(struct hd_parser_state *state, int *pos)
 {
     struct node *result = NULL;
 
@@ -120,7 +133,7 @@ struct node *hd_handle_hash(struct lexer_state *state, int *pos)
     return result;
 }
 
-struct node *hd_handle_string(struct lexer_state *state, int *pos)
+static struct node *hd_handle_string(struct hd_parser_state *state, int *pos)
 {
     struct node *result = NULL;
 
@@ -152,7 +165,7 @@ struct node *hd_handle_string(struct lexer_state *state, int *pos)
     return result;
 }
 
-struct node *hd_handle_int(struct lexer_state *state, int *pos)
+static struct node *hd_handle_int(struct hd_parser_state *state, int *pos)
 {
     struct node *result = NULL;
 
@@ -172,7 +185,7 @@ struct node *hd_handle_int(struct lexer_state *state, int *pos)
     return result;
 }
 
-struct node *hd_handle_null(struct lexer_state *state, int *pos)
+static struct node *hd_handle_null(struct hd_parser_state *state, int *pos)
 {
     struct node *result = NULL;
 
@@ -183,7 +196,7 @@ struct node *hd_handle_null(struct lexer_state *state, int *pos)
     return result;
 }
 
-struct node *hd_dispatch(struct lexer_state *state, int *pos)
+static struct node *hd_dispatch(struct hd_parser_state *state, int *pos)
 {
     struct node *result = NULL;
 
@@ -252,19 +265,9 @@ static int _hd_dump_recursive(const struct node *node, int level)
     return rc;
 }
 
-int hd_dump(const struct node *node)
-{
-    int rc = 0;
-
-    rc = _hd_dump_recursive(node, 0);
-    fputc('\n', stdout);
-
-    return rc;
-}
-
 static void output_handler(SyckEmitter *e, char *ptr, long len)
 {
-    const struct lexer_state *state = e->bonus;
+    const struct hd_parser_state *state = e->bonus;
     write(state->out_fd, ptr, len);
 }
 
@@ -318,7 +321,65 @@ static void emitter_handler(SyckEmitter *e, st_data_t data)
     // if it's a COLLECTION, it has already been emitted
 }
 
-int hd_yaml(const struct lexer_state *state, const struct node *node)
+//------------------------------------------------------------------------------
+// Public API
+//------------------------------------------------------------------------------
+
+int hd_init(struct hd_parser_state **state)
+{
+    *state = hd_alloc(sizeof **state);
+    return !!state;
+}
+
+int hd_fini(struct hd_parser_state **state)
+{
+    if (!state) return -1;
+    close((*state)->out_fd);
+    hd_free(*state);
+    *state = NULL;
+    return 0;
+}
+
+int hd_get_out_fd(struct hd_parser_state *state)
+{
+    return state->out_fd;
+}
+
+int hd_set_out_fd(struct hd_parser_state *state, int out_fd)
+{
+    state->out_fd = out_fd;
+    return out_fd >= 0;
+}
+
+void* hd_get_userdata(struct hd_parser_state *state)
+{
+    return state->userdata;
+}
+
+int hd_set_userdata(struct hd_parser_state *state, void *data)
+{
+    state->userdata = data;
+    return 0;
+}
+
+chunker_t hd_get_chunker(struct hd_parser_state *state)
+{
+    return state->chunker;
+}
+
+int hd_set_chunker(struct hd_parser_state *state, chunker_t chunker)
+{
+    state->chunker = chunker;
+    return 0;
+}
+
+struct node *hd_parse(struct hd_parser_state *state)
+{
+    int pos = 0;
+    return hd_dispatch(state, &pos);
+}
+
+int hd_yaml(const struct hd_parser_state *state, const struct node *node)
 {
     int rc = 0;
 
@@ -336,39 +397,12 @@ int hd_yaml(const struct lexer_state *state, const struct node *node)
     return rc;
 }
 
-int main(int argc, char *argv[])
+int hd_dump(const struct node *node)
 {
     int rc = 0;
 
-    struct lexer_state state;
-
-    if (argc < 2 || argc > 3) {
-        _err("Supply an input filename and an optional output filename");
-        return EXIT_FAILURE;
-    }
-
-    rc = hd_read_file_init(argv[1], &state.chunker, &state.userdata);
-    if (rc) return EXIT_FAILURE;
-
-    if (argc == 2) {
-        state.out_fd = fileno(stdout);
-    } else {
-        state.out_fd = open(argv[2], O_WRONLY | O_CREAT);
-        if (state.out_fd < 0) {
-            _err("Failed to open output file '%s'", argv[2]);
-            return EXIT_FAILURE;
-        }
-    }
-
-    int pos = 0;
-    struct node *result = hd_dispatch(&state, &pos);
-
-    //rc = hd_dump(result);
-    rc = hd_yaml(&state, result);
-
-    rc = hd_read_file_fini(state.userdata);
-
-    close(state.out_fd);
+    rc = _hd_dump_recursive(node, 0);
+    fputc('\n', stdout);
 
     return rc;
 }

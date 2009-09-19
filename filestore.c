@@ -1,10 +1,18 @@
 #include "filestore.h"
 
+#include <errno.h>
 #include <fcntl.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#define _err(...) do { \
+    fprintf(stderr, __VA_ARGS__); \
+    fprintf(stderr, "\n"); \
+} while (0)
 
 struct filestate {
     int fd;
@@ -19,9 +27,9 @@ static const char* _chunker(void *data, unsigned long offset, size_t count)
     return &state->data[offset];
 }
 
-int hd_read_file_fini(void *data)
+int hd_read_file_fini(struct hd_parser_state *parser_state)
 {
-    struct filestate *state = data;
+    struct filestate *state = hd_get_userdata(parser_state);
 
     if (!state) return -1;
 
@@ -32,9 +40,11 @@ int hd_read_file_fini(void *data)
     return 0;
 }
 
-int hd_read_file_init(const char *filename, chunker_t *chunker, void **data)
+int hd_read_file_init(struct hd_parser_state *parser_state, void *userdata)
 {
     int rc = 0;
+
+    const char *filename = userdata;
 
     struct filestate *state = malloc(sizeof *state);
 
@@ -53,8 +63,8 @@ int hd_read_file_init(const char *filename, chunker_t *chunker, void **data)
 
     state->data = mmap(NULL, state->stat.st_size, PROT_READ, MAP_PRIVATE, state->fd, 0);
 
-    if (data   ) *data    = state   ; else return -1;
-    if (chunker) *chunker = _chunker; else return -1;
+    hd_set_userdata(parser_state, state);
+    hd_set_chunker(parser_state, _chunker);
 
     return rc;
 }

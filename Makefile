@@ -4,6 +4,6 @@ CFLAGS  += -std=c99 -W -Wall -Werror -Wextra -pedantic-errors $(addprefix -D,$(D
 CFLAGS  += -g3 -Wno-unused
 LDLIBS  += -lsyck
 
-all: lexer
+all: hd2yaml
 
-lexer: lexer.o filestore.o
+hd2yaml: hd2yaml.o hd_parser.o filestore.o
