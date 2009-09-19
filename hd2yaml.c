@@ -40,6 +40,7 @@ int main(int argc, char *argv[])
     rc = hd_yaml(state, result);
     rc = hd_read_file_fini(state);
     rc = hd_fini(&state);
+    hd_free(result);
 
     return rc;
 }

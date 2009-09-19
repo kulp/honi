@@ -48,15 +48,28 @@ struct node {
 };
 
 /// @todo write a more efficient chunking allocator
-static inline void* hd_alloc(size_t size)
+void* hd_alloc(size_t size)
 {
     return malloc(size);
 }
 
-/// @todo write matching deallocator
-static inline void hd_free(void* ptr)
+void hd_free(struct node* node)
 {
-    free(ptr);
+    switch (node->type) {
+        case NODE_BOOL   : 
+        case NODE_INT    : 
+        case NODE_NULL   :                           break;
+        case NODE_STRING : free(node->val.s.val);    break;
+        case NODE_HASH   :
+            for (int i = 0; i < node->val.a.len; i++) {
+                hd_free(node->val.a.pairs[i].key);
+                hd_free(node->val.a.pairs[i].val);
+            }
+            free(node->val.a.pairs);
+            break;
+    };
+
+    free(node);
 }
 
 static int compare_pairs(const void *a, const void *b)
@@ -335,7 +348,7 @@ int hd_fini(struct hd_parser_state **state)
 {
     if (!state) return -1;
     close((*state)->out_fd);
-    hd_free(*state);
+    free(*state);
     *state = NULL;
     return 0;
 }
