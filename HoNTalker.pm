@@ -3,7 +3,7 @@ use strict;
 use warnings;
 use feature 'say';
 
-package Fortyn;
+package HoNTalker;
 
 use Data::HexDump;
 use Digest::MD5 qw(md5_hex);
@@ -22,15 +22,6 @@ use LexerWrapper qw(lex);
 my $base = qq(http://masterserver.hon.s2games.com);
 my $cr_url = qq($base/client_requester.php);
 
-my $keepalive_period = 30;  # seconds
-my @abide = qw(UWEC);
-
-my ($user, $pass) = @ARGV;
-$user and $pass or die "Supply username and password";
-
-# TODO move into object
-my $ua = LWP::UserAgent->new;
-
 ################################################################################
 
 my %actions = (
@@ -48,22 +39,37 @@ my %actions = (
 
 ######################### P O E   E N T R Y   P O I N T ########################
 
-my $client = Fortyn->new(abide => \@abide);
-POE::Kernel->run();
-exit;
+unless (caller) {
+    my ($user, $pass, $chan) = @ARGV;
+    $user and $pass or die "Supply username and password";
+
+    my $client = HoNTalker->new(
+            user     => $user,
+            password => $pass,
+            abide    => [ $chan || () ],
+        );
+    POE::Kernel->run();
+    exit;
+}
 
 ################################# M E T H O D S ################################
 
 sub new
 {
     my ($class, %args) = @_;
+    #my $external_handler = delete $args{event_obj};
     my $self = bless {
-        abide => { map { lc $_ => 1 } @{ delete $args{abide} || [] } },
-        %args,
+        abide      => { map { lc $_ => 1 } @{ delete $args{abide} || [] } },
+        keepalive  => delete $args{keepalive} || 30,  # seconds
         recv_count => 0,
+        ua         => LWP::UserAgent->new,
+        %args,
     } => $class;
 
-    my $data = $self->{data} = _rpc(auth => login => $user, password => md5_hex($pass));
+    my $data = $self->{data} = $self->_rpc(auth =>
+            login    => $self->{user},
+            password => md5_hex($self->{password}),
+        );
 
     die "Error: $data->{auth}\n" if $data->{auth};
 
@@ -84,6 +90,10 @@ sub new
         #ServerFlushed => sub { say "server flushed"; },
         ServerError   => sub { say "server error"; },
         ObjectStates  => [
+            #($external_handler ? ($external_handler => [ qw(
+            #    _default
+            #) ]) : ()),
+            @{ $self->{object_states} || [] },
             $self => [ qw(
                 _process_message
                 _dispatch
@@ -120,7 +130,7 @@ sub _nick2id
     if (@need) {
         %results = (
             %results,
-            _rpc(nick2id => map { "nickname[" . $i++ . "]" => $_ } @need)
+            $self->_rpc(nick2id => map { "nickname[" . $i++ . "]" => $_ } @need)
         );
     }
 
@@ -178,7 +188,7 @@ sub channel_presence
     $self->{id2chan}{$chanid}  = $channel;
 
     $pos += length($channel) + 1 + 4 + 1 + length($welcome) + 1 + 4;
-    say "I ($user) am in channel '$channel'";
+    say "I ($self->{user}) am in channel '$channel'";
     say "    special user(s) registered in this channel ($specials):";
 
     for my $i (0 .. $specials - 1) {
@@ -271,7 +281,7 @@ sub server_input
     #say "packet received ($self->{recv_count})";
 
     if ($self->{recv_count}++ == 0) {
-        $kernel->delay(keepalive => $keepalive_period);
+        $kernel->delay(keepalive => $self->{keepalive});
         $kernel->yield(join_channel => $_) for keys %{ $self->{abide} };
     }
 
@@ -296,7 +306,7 @@ sub keepalive
     my ($self, $kernel) = @_[OBJECT, KERNEL];
     say "keepalive";
     $self->{tcp}->put(chr 2);
-    $kernel->delay(keepalive => $keepalive_period);
+    $kernel->delay(keepalive => $self->{keepalive});
 }
 
 sub add_buddy
@@ -335,8 +345,8 @@ sub leave_channel
 # TODO convert to an event ?
 sub _rpc
 {
-    my ($method, @args) = @_;
-    my $response = $ua->post($cr_url, {
+    my ($self, $method, @args) = @_;
+    my $response = $self->{ua}->post($cr_url, {
         f => $method,
         @args,
     });
@@ -345,4 +355,6 @@ sub _rpc
     delete $data->{0}; # I don't understand this extra top-level key
     return wantarray ? %$data : $data;
 }
+
+1;
 
