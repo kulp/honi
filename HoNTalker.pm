@@ -3,12 +3,14 @@ use strict;
 use warnings;
 use feature 'say';
 
+# TODO add event forwarding
+
 package HoNTalker;
 
 use Data::HexDump;
 use Digest::MD5 qw(md5_hex);
 use IO::Socket::INET;
-use List::MoreUtils qw(mesh);
+use List::MoreUtils qw(mesh uniq);
 use LWP::UserAgent;
 use YAML qw(Dump);
 
@@ -26,10 +28,12 @@ my $cr_url = qq($base/client_requester.php);
 
 my %actions = (
     0x00 => 'login_success',
+    0x03 => 'channel_traffic',
     0x04 => 'channel_presence',
+    0x05 => 'channel_join_notice',
+    0x06 => 'channel_part_notice',
     0x0B => 'my_presence',
     0x2D => 'whois_response',
-    0x03 => 'channel_traffic',
 
 #    0x05 => 'ignore_message',
 #    0x06 => 'ignore_message',
@@ -94,7 +98,7 @@ sub new
             #    _default
             #) ]) : ()),
             @{ $self->{object_states} || [] },
-            $self => [ qw(
+            $self => $self->{actions} = [ uniq qw(
                 _process_message
                 _dispatch
 
@@ -106,16 +110,22 @@ sub new
                 ignore_message
                 join_channel
                 keepalive
-                leave_channel
                 login_success
                 my_presence
+                part_channel
+                say_in_channel
                 server_input
                 whois_response
-            ) ],
+            ), values %actions ],
         ],
     );
 
     return $self;
+}
+
+sub actions
+{
+    return @{ shift->{actions} };
 }
 
 sub _nick2id
@@ -211,9 +221,12 @@ sub channel_presence
 
         printf "        name=%-16s, id=%7d, flags=0x%04x\n", $name, $id, $flags;
         $pos += length($name) + 1 + 4 + 2;
+        #$kernel->yield(h2i_user_join_channel => $name, $channel);
+        $kernel->post($self->{bridge}, h2i_user_join_channel => $name, $channel);
     }
 
-    $kernel->yield(leave_channel => $channel) unless $self->{abide}{lc $channel}
+    #$kernel->yield(part_channel => $channel) unless $self->{abide}{lc $channel}
+    $kernel->delay(part_channel => 10, $channel) unless $self->{abide}{lc $channel}
 }
 
 sub channel_traffic
@@ -223,6 +236,7 @@ sub channel_traffic
     my $who   = $self->{id2nick}{$userid} || "id $userid";
     my $where = $self->{id2chan}{$chanid} || "id $chanid";
     say "user $who said in channel $where : '$saying'";
+    $kernel->post($self->{bridge}, h2i_user_said_in_channel => $who, $where, $saying);
 }
 
 sub whois_response
@@ -333,11 +347,43 @@ sub join_channel
     $self->{tcp}->put(pack "C Z*", 0x1E, $chan);
 }
 
-sub leave_channel
+sub part_channel
 {
     my ($self, $kernel, $chan) = @_[OBJECT, KERNEL, ARG0];
     say "leaving channel '$chan'";
     $self->{tcp}->put(pack "C Z*", 0x22, $chan);
+}
+
+sub channel_join_notice
+{
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
+    my ($code, $user, $userid, $chanid, $flags) = unpack "C Z* V V v", $message;
+    #$kernel->yield(hon_joined_channel => $userid, $chanid);
+    my $chan = $self->{id2chan}{$chanid};
+    $kernel->post($self->{bridge}, h2i_user_join_channel => $user, $chan);
+
+    say "User $user joined channel $chan";
+}
+
+sub channel_part_notice
+{
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
+    my ($code, $userid, $chanid) = unpack "C V V", $message;
+    #$kernel->yield(hon_parted_channel => $userid, $chanid);
+
+    my $user = $self->{id2nick}{$userid} || "id $userid";
+    say "User $user left channel $self->{id2chan}{$chanid}";
+    my $chan = $self->{id2chan}{$chanid};
+    $kernel->post($self->{bridge}, h2i_user_part_channel => $user, $chan);
+}
+
+sub say_in_channel
+{
+    my ($self, $kernel, $user, $chan, $message) = @_[OBJECT, KERNEL, ARG0, ARG1, ARG2];
+    say "looking up chanid for $chan";
+    my $chanid = $self->{chan2id}{$chan} || return;
+    say "putting message $message to chanid $chanid";
+    $self->{tcp}->put(pack "C Z* V", 0x03, $message, $chanid);
 }
 
 ############################ U T I L I T Y   S U B S ###########################
