@@ -39,11 +39,14 @@ my $bridge = POE::Session->create(
                 ircd_daemon_join
                 ircd_daemon_part
                 ircd_daemon_public
+                ircd_daemon_privmsg
                 ircd_registered
 
                 h2i_user_join_channel
                 h2i_user_part_channel
                 h2i_user_said_in_channel
+                h2i_user_whispered_to_me
+                h2i_user_whispered_to_friends
             ) ],
             $tkr => [ $tkr->actions ],
         ],
@@ -56,7 +59,7 @@ exit;
 
 sub _start
 {
-    my ($kernel) = @_[KERNEL];
+    my ($kernel) = $_[KERNEL];
     say "start";
     $h2i->{ircd}->yield('register');
     #$kernel->yield(h2i_user_join_channel => "myself_and_i", "hon_3");

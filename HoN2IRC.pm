@@ -61,6 +61,12 @@ sub new
     return $self;
 }
 
+sub _is_me
+{
+    my ($self, $arg) = @_;
+    $arg =~ /^[~@]?\b$self->{user}\b/;
+}
+
 sub ircd_registered
 {
     my ($self, $kernel) = @_[OBJECT, KERNEL];
@@ -97,7 +103,22 @@ sub ircd_daemon_public
     my $name = _name($nick);
     # keep a map of safename <=> realname for maps (and for nicks too ?)
     say "$name said >>$message<< in $chan";
-    $kernel->yield(say_in_channel => $name, _safen($chan), $message);
+    if ($self->_is_me($name)) {
+        $kernel->yield(say_in_channel => _safen($chan), $message);
+    }
+}
+
+sub ircd_daemon_privmsg
+{
+    my ($self, $kernel, $nick, $user, $message) = @_[OBJECT, KERNEL, ARG0, ARG1, ARG2];
+    my $name = _name($nick);
+    say "$name said >>$message<< to $user";
+    # it shouldn't be possible for this check to be false, but we want
+    # to be sure we don't start a loop
+    if ($self->_is_me($name)) {
+        # TODO map the user back to a safename
+        $kernel->yield(whisper_user => $user, $message);
+    }
 }
 
 sub ircd_daemon_part
@@ -106,7 +127,9 @@ sub ircd_daemon_part
     my $nick = _nick($user);
     return if $nick eq $my_name;
     $self->{ircd}->yield(daemon_cmd_part => $my_name => $chan);
-    $kernel->yield(part_channel => _unsafen(my $clean = $chan));
+    if ($self->_is_me($user)) {
+        $kernel->yield(part_channel => _unsafen(my $clean = $chan));
+    }
 }
 
 sub h2i_user_part_channel
@@ -114,6 +137,7 @@ sub h2i_user_part_channel
     my ($self, $kernel, $user, $chan) = @_[OBJECT, KERNEL, ARG0, ARG1];
     my $safechan = $chan; _safen($safechan);
     my $safeuser = $user; _safen($safeuser);
+    # TODO check that user is valid before parting
     $self->{ircd}->yield(daemon_cmd_part => $safeuser => "#$safechan");
     say "DEBUG: user $user ($safeuser) parted channel $chan ($safechan)";
 }
@@ -142,6 +166,21 @@ sub h2i_user_said_in_channel
     my $safechan = $chan; _safen($safechan);
     my $safeuser = $user; _safen($safeuser);
     $self->{ircd}->yield(daemon_cmd_privmsg => $safeuser, "#$safechan", $message);
+}
+
+sub h2i_user_whispered_to_me
+{
+    my ($self, $kernel, $user, $message) = @_[OBJECT, KERNEL, ARG0, ARG1];
+    my $safeuser = $user; _safen($safeuser);
+    $self->{ircd}->yield(daemon_cmd_privmsg => $safeuser, $self->{user}, $message);
+}
+
+sub h2i_user_whispered_to_friends
+{
+    # TODO differentiate from regular whisper
+    my ($self, $kernel, $user, $message) = @_[OBJECT, KERNEL, ARG0, ARG1];
+    my $safeuser = $user; _safen($safeuser);
+    $self->{ircd}->yield(daemon_cmd_privmsg => $safeuser, $self->{user}, $message);
 }
 
 # Taken from the POE::Component::Server::IRC documentation. For debugging only.

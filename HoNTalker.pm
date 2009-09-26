@@ -32,7 +32,9 @@ my %actions = (
     0x04 => 'channel_presence',
     0x05 => 'channel_join_notice',
     0x06 => 'channel_part_notice',
+    0x08 => 'received_whisper',
     0x0B => 'my_presence',
+    0x20 => 'received_whisper_all',
     0x2D => 'whois_response',
 
 #    0x05 => 'ignore_message',
@@ -116,6 +118,8 @@ sub new
                 say_in_channel
                 server_input
                 whois_response
+                whisper_user
+                whisper_all_friends
             ), values %actions ],
         ],
     );
@@ -237,6 +241,22 @@ sub channel_traffic
     my $where = $self->{id2chan}{$chanid} || "id $chanid";
     say "user $who said in channel $where : '$saying'";
     $kernel->post($self->{bridge}, h2i_user_said_in_channel => $who, $where, $saying);
+}
+
+sub received_whisper
+{
+    my ($self, $kernel, $data) = @_[OBJECT, KERNEL, ARG0];
+    my ($code, $speaker, $message) = unpack "C Z* Z*", $data;
+    say "user $speaker whispered to me: $message";
+    $kernel->post($self->{bridge}, h2i_user_whispered_to_me => $speaker, $message);
+}
+
+sub received_whisper_all
+{
+    my ($self, $kernel, $data) = @_[OBJECT, KERNEL, ARG0];
+    my ($code, $speaker, $message) = unpack "C Z* Z*", $data;
+    say "user $speaker whispered to all his friends: $message";
+    $kernel->post($self->{bridge}, h2i_user_whispered_to_friends => $speaker, $message);
 }
 
 sub whois_response
@@ -379,11 +399,25 @@ sub channel_part_notice
 
 sub say_in_channel
 {
-    my ($self, $kernel, $user, $chan, $message) = @_[OBJECT, KERNEL, ARG0, ARG1, ARG2];
+    my ($self, $kernel, $chan, $message) = @_[OBJECT, KERNEL, ARG0, ARG1];
     say "looking up chanid for $chan";
     my $chanid = $self->{chan2id}{$chan} || return;
     say "putting message $message to chanid $chanid";
     $self->{tcp}->put(pack "C Z* V", 0x03, $message, $chanid);
+}
+
+sub whisper_user
+{
+    my ($self, $kernel, $user, $message) = @_[OBJECT, KERNEL, ARG0, ARG1];
+    say "whispering message $message to user $user";
+    $self->{tcp}->put(pack "C Z* Z*", 0x08, $user, $message);
+}
+
+sub whisper_all_friends
+{
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
+    say "whispering message $message to all friends";
+    $self->{tcp}->put(pack "C Z*", 0x20, $message);
 }
 
 ############################ U T I L I T Y   S U B S ###########################
