@@ -21,6 +21,9 @@ use POE qw(
 #use LexerWrapper qw(lex);
 
 our $my_name = q(_h2i);
+our $FRIENDS_CHANNEL = q(&friends);
+our $CONTROL_CHANNEL = q(&control);
+our $CMD_PREFIX = q(!);
 
 ######################### P O E   E N T R Y   P O I N T ########################
 
@@ -89,8 +92,9 @@ sub ircd_daemon_join
     my ($self, $kernel, $user, $chan) = @_[OBJECT, KERNEL, ARG0, ARG1];
     my $nick = _nick($user);
     return if $nick eq $my_name;
-    $self->{ircd}->yield(daemon_cmd_join => $my_name => $chan);
     _unsafen(my $clean = $chan);
+    $self->{ircd}->yield(daemon_cmd_join => $my_name => $chan);
+    return if $chan =~ /^[+&]/; # special channels, don't translate to HoN channels
     # TODO rename event name (put a prefix on it)
     # TODO stop joining the channel over and over again if we are just getting
     # notification of our own spoofed join
@@ -104,7 +108,14 @@ sub ircd_daemon_public
     # keep a map of safename <=> realname for maps (and for nicks too ?)
     say "$name said >>$message<< in $chan";
     if ($self->_is_me($name)) {
-        $kernel->yield(say_in_channel => _safen($chan), $message);
+        if ($chan eq $FRIENDS_CHANNEL) {
+            $kernel->yield(whisper_all_friends => $message);
+        } elsif ($chan eq $CONTROL_CHANNEL) {
+            $kernel->yield(dispatch_command => $message);
+        } else {
+            # TODO check that I am in this channel
+            $kernel->yield(say_in_channel => _safen($chan), $message);
+        }
     }
 }
 
@@ -138,7 +149,7 @@ sub h2i_user_part_channel
     my $safechan = $chan; _safen($safechan);
     my $safeuser = $user; _safen($safeuser);
     # TODO check that user is valid before parting
-    $self->{ircd}->yield(daemon_cmd_part => $safeuser => "#$safechan");
+    #$self->{ircd}->yield(daemon_cmd_part => $safeuser => "#$safechan");
     say "DEBUG: user $user ($safeuser) parted channel $chan ($safechan)";
 }
 
@@ -172,6 +183,13 @@ sub h2i_user_whispered_to_me
 {
     my ($self, $kernel, $user, $message) = @_[OBJECT, KERNEL, ARG0, ARG1];
     my $safeuser = $user; _safen($safeuser);
+    # TODO make this idempotent ? wrap it ?
+    $self->{ircd}->yield(add_spoofed_nick => {
+            nick    => $safeuser,
+            # TODO make the mode mean something
+            #umode   => 'v',
+            ircname => $user,
+        });
     $self->{ircd}->yield(daemon_cmd_privmsg => $safeuser, $self->{user}, $message);
 }
 
@@ -180,7 +198,28 @@ sub h2i_user_whispered_to_friends
     # TODO differentiate from regular whisper
     my ($self, $kernel, $user, $message) = @_[OBJECT, KERNEL, ARG0, ARG1];
     my $safeuser = $user; _safen($safeuser);
+    $self->{ircd}->yield(add_spoofed_nick => {
+            nick    => $safeuser,
+            # TODO make the mode mean something
+            #umode   => 'v',
+            ircname => $user,
+        });
     $self->{ircd}->yield(daemon_cmd_privmsg => $safeuser, $self->{user}, $message);
+}
+
+sub h2i_general_notice
+{
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
+    $self->{ircd}->yield(daemon_cmd_notice => $my_name, $self->{user}, $message);
+}
+
+sub dispatch_command
+{
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
+    if (my ($cmd, $args) = $message =~ /^\Q$CMD_PREFIX\E (\w+) (?:\s+ (.*?))? \s*$/x) {
+        my @args = split " ", $args;
+        # TODO implement commands table
+    }
 }
 
 # Taken from the POE::Component::Server::IRC documentation. For debugging only.

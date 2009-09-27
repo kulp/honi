@@ -34,8 +34,6 @@ my $bridge = POE::Session->create(
         ],
         object_states => [
             $h2i => [ qw(
-                _default
-
                 ircd_daemon_join
                 ircd_daemon_part
                 ircd_daemon_public
@@ -47,6 +45,9 @@ my $bridge = POE::Session->create(
                 h2i_user_said_in_channel
                 h2i_user_whispered_to_me
                 h2i_user_whispered_to_friends
+                h2i_general_notice
+
+                dispatch_command
             ) ],
             $tkr => [ $tkr->actions ],
         ],

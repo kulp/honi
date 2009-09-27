@@ -34,6 +34,7 @@ my %actions = (
     0x06 => 'channel_part_notice',
     0x08 => 'received_whisper',
     0x0B => 'my_presence',
+    0x12 => 'notification',
     0x20 => 'received_whisper_all',
     0x2D => 'whois_response',
 
@@ -104,7 +105,7 @@ sub new
                 _process_message
                 _dispatch
 
-                add_buddy
+                add_friend
                 channel_presence
                 channel_traffic
                 check_user
@@ -154,7 +155,7 @@ sub _nick2id
 
 # I'm not sure what the purpose of this sequence number is, or even if it is
 # a sequence number, but it appears to be a monotonically increasing
-# non-time-linear sequence that is used at least for buddy management. We fake
+# non-time-linear sequence that is used at least for friend management. We fake
 # one.
 sub _seq_num
 {
@@ -343,14 +344,14 @@ sub keepalive
     $kernel->delay(keepalive => $self->{keepalive});
 }
 
-sub add_buddy
+sub add_friend
 {
-    my ($self, $kernel, $buddy) = @_[OBJECT, KERNEL, ARG0];
+    my ($self, $kernel, $friend) = @_[OBJECT, KERNEL, ARG0];
     my $server = $self->{tcp};
 
-    say "adding buddy $buddy";
+    say "adding friend $friend";
 
-    my $id = $self->_nick2id($buddy)->{$buddy};
+    my $id = $self->_nick2id($friend)->{$friend};
     my $seq = $self->_seq_num();
     # YAUBS
     my $packed = pack "C V V V", 0x0d, $id, $seq, $seq + 1;
@@ -362,8 +363,10 @@ sub add_buddy
 sub join_channel
 {
     my ($self, $kernel, $chan) = @_[OBJECT, KERNEL, ARG0];
+    return if $self->{inchans}{lc $chan};
     say "joining channel '$chan'";
-    $self->{abide}{lc $chan} = 1;
+    $self->{abide  }{lc $chan} = 1;
+    $self->{inchans}{lc $chan} = 1;
     $self->{tcp}->put(pack "C Z*", 0x1E, $chan);
 }
 
@@ -418,6 +421,14 @@ sub whisper_all_friends
     my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     say "whispering message $message to all friends";
     $self->{tcp}->put(pack "C Z*", 0x20, $message);
+}
+
+sub notification
+{
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
+    my ($code, $yaubs, $string) = unpack "C C Z*", $message;
+    say "received notification '$string'";
+    $kernel->post($self->{bridge}, h2i_general_notice => $string);
 }
 
 ############################ U T I L I T Y   S U B S ###########################
