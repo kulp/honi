@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <fcntl.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -283,7 +284,7 @@ static void output_handler(SyckEmitter *e, char *ptr, long len)
     write((uintptr_t)e->bonus, ptr, len);
 }
 
-static int write_handler(void *ext, char *buffer, int size)
+static int write_handler(void *ext, unsigned char *buffer, size_t size)
 {
     return write((uintptr_t)ext, buffer, size) > 0;
 }
@@ -319,7 +320,7 @@ static void emitter_handler(SyckEmitter *e, st_data_t data)
             break;
         case NODE_HASH:
             mode = COLLECTION;
-            syck_emit_map(e, NULL);
+            syck_emit_map(e, NULL, map_none);
 
             for (int i = 0; i < node->val.a.len; i++) {
                 syck_emit_item(e, (st_data_t)node->val.a.pairs[i].key);
@@ -335,6 +336,60 @@ static void emitter_handler(SyckEmitter *e, st_data_t data)
 
     if (mode == SCALAR)
         syck_emit_scalar(e, NULL, scalar_none, 1, 1, 1, what, len); // if it's a COLLECTION, it has already been emitted
+}
+
+static void node_emitter(yaml_emitter_t *e, const struct node *node)
+{
+    enum { NONE, SCALAR, COLLECTION } mode = NONE;
+
+    yaml_event_t event;
+    yaml_scalar_style_t style = YAML_PLAIN_SCALAR_STYLE;
+
+    char *what;
+    char tempbuf[10];
+    int len;
+    switch (node->type) {
+        case NODE_INT:
+            mode = SCALAR;
+            len  = sprintf(what = tempbuf, "%ld", node->val.i);
+            break;
+        case NODE_BOOL:
+            mode = SCALAR;
+            what = node->val.b ? "true" : "false";
+            len  = strlen(what);
+            break;
+        case NODE_STRING:
+            mode = SCALAR;
+            what = node->val.s.val;
+            len  = node->val.s.len;
+            break;
+        case NODE_NULL:
+            mode = SCALAR;
+            what = "null";
+            len = 4;
+            break;
+        case NODE_HASH:
+            mode = COLLECTION;
+            yaml_mapping_start_event_initialize(&event, NULL, NULL, 0, YAML_BLOCK_MAPPING_STYLE); /// @todo 1 ?
+            yaml_emitter_emit(e, &event);
+
+            for (int i = 0; i < node->val.a.len; i++) {
+                node_emitter(e, node->val.a.pairs[i].key);
+                node_emitter(e, node->val.a.pairs[i].val);
+            }
+
+            yaml_mapping_end_event_initialize(&event);
+            yaml_emitter_emit(e, &event);
+            break;
+        default:
+            _err("Unrecognized node type '%d'", node->type);
+            return;
+    }
+
+    if (mode == SCALAR) {
+        yaml_scalar_event_initialize(&event, NULL, NULL, (yaml_char_t*)what, len, true, true, style);
+        yaml_emitter_emit(e, &event);
+    }
 }
 
 //------------------------------------------------------------------------------
@@ -412,7 +467,7 @@ int hd_yaml2(int fd, const struct node *node, int flags)
 
     yaml_emitter_initialize(&emitter);
 
-    yaml_emitter_set_output(&emitter, write_handler, ext);
+    yaml_emitter_set_output(&emitter, write_handler, (void*)(uintptr_t)fd);
 
     /* Create and emit the STREAM-START event. */
     yaml_stream_start_event_initialize(&event, YAML_UTF8_ENCODING);
@@ -423,8 +478,7 @@ int hd_yaml2(int fd, const struct node *node, int flags)
     if (!yaml_emitter_emit(&emitter, &event))
         goto error;
 
-    /// @todo
-
+    node_emitter(&emitter, node);
 
     yaml_document_end_event_initialize(&event, 1);
     if (!yaml_emitter_emit(&emitter, &event))
@@ -471,5 +525,5 @@ void hd_free(struct node* node)
     free(node);
 }
 
-/* vim:set ts=4 sw=4 syntax=c.doxygen: */
+/* vim:set et ts=4 sw=4 syntax=c.doxygen: */
 

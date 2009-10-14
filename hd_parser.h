@@ -57,6 +57,7 @@ struct node *hd_parse(struct hd_parser_state *state);
  * @return zero on success, non-zero on undifferentiated error
  */
 int hd_yaml(int fd, const struct node *node, int flags);
+int hd_yaml2(int fd, const struct node *node, int flags);
 
 /**
  * Dumps a particular tree or subtree, in the native format, to the file
