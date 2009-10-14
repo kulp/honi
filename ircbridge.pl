@@ -8,7 +8,6 @@ use YAML qw(Dump);
 use POE;
 
 use lib ".";
-use LexerWrapper qw(lex);
 use HoNTalker;
 use HoN2IRC;
 

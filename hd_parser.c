@@ -9,6 +9,7 @@
 #include <string.h>
 #include <syck.h>
 #include <unistd.h>
+#include <yaml.h>
 
 #define _err(...) do { \
     fprintf(stderr, __VA_ARGS__); \
@@ -282,6 +283,11 @@ static void output_handler(SyckEmitter *e, char *ptr, long len)
     write((uintptr_t)e->bonus, ptr, len);
 }
 
+static int write_handler(void *ext, char *buffer, int size)
+{
+    return write((uintptr_t)ext, buffer, size) > 0;
+}
+
 static void emitter_handler(SyckEmitter *e, st_data_t data)
 {
     const struct node *node = (const struct node *)data;
@@ -292,11 +298,11 @@ static void emitter_handler(SyckEmitter *e, st_data_t data)
     char tempbuf[10];
     int len;
     switch (node->type) {
-        case NODE_INT   :
+        case NODE_INT:
             mode = SCALAR;
             len  = sprintf(what = tempbuf, "%ld", node->val.i);
             break;
-        case NODE_BOOL  :
+        case NODE_BOOL:
             mode = SCALAR;
             what = node->val.b ? "true" : "false";
             len  = strlen(what);
@@ -306,12 +312,12 @@ static void emitter_handler(SyckEmitter *e, st_data_t data)
             what = node->val.s.val;
             len  = node->val.s.len;
             break;
-        case NODE_NULL  :
+        case NODE_NULL:
             mode = SCALAR;
             what = NULL;
             len = 0;
             break;
-        case NODE_HASH  :
+        case NODE_HASH:
             mode = COLLECTION;
             syck_emit_map(e, NULL);
 
@@ -328,8 +334,7 @@ static void emitter_handler(SyckEmitter *e, st_data_t data)
     }
 
     if (mode == SCALAR)
-        syck_emit_scalar(e, NULL, scalar_plain, 1, 1, 1, what, len);
-    // if it's a COLLECTION, it has already been emitted
+        syck_emit_scalar(e, NULL, scalar_none, 1, 1, 1, what, len); // if it's a COLLECTION, it has already been emitted
 }
 
 //------------------------------------------------------------------------------
@@ -394,6 +399,43 @@ int hd_yaml(int fd, const struct node *node, int flags)
     syck_emitter_flush(e, 0);
 
     syck_free_emitter(e);
+
+    return rc;
+}
+
+int hd_yaml2(int fd, const struct node *node, int flags)
+{
+    int rc = 0;
+
+    yaml_emitter_t emitter;
+    yaml_event_t event;
+
+    yaml_emitter_initialize(&emitter);
+
+    yaml_emitter_set_output(&emitter, write_handler, ext);
+
+    /* Create and emit the STREAM-START event. */
+    yaml_stream_start_event_initialize(&event, YAML_UTF8_ENCODING);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto error;
+
+    yaml_document_start_event_initialize(&event, NULL, NULL, NULL, 0);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto error;
+
+    /// @todo
+
+
+    yaml_document_end_event_initialize(&event, 1);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto error;
+
+    yaml_stream_end_event_initialize(&event);
+    if (!yaml_emitter_emit(&emitter, &event))
+        goto error;
+
+error:
+    yaml_emitter_delete(&emitter);
 
     return rc;
 }

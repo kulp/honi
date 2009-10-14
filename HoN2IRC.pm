@@ -18,7 +18,6 @@ use POE qw(
     );
 
 #use lib ".";
-#use LexerWrapper qw(lex);
 
 our $my_name = q(_h2i);
 our $FRIENDS_CHANNEL = q(&friends);

@@ -7,6 +7,7 @@ use feature 'say';
 
 package HoNTalker;
 
+use Attribute::Memoize;
 use Data::HexDump;
 use Digest::MD5 qw(md5_hex);
 use IO::Socket::INET;
@@ -17,7 +18,7 @@ use YAML qw(Dump);
 use POE qw(Component::Client::TCP Filter::Stream);
 
 use lib ".";
-use LexerWrapper qw(lex);
+use ParserWrapper qw(h2yaml);
 
 ################################################################################
 
@@ -73,7 +74,7 @@ sub new
         %args,
     } => $class;
 
-    my $data = $self->{data} = $self->_rpc(auth =>
+    my $data = $self->{me} = $self->_rpc(auth =>
             login    => $self->{user},
             password => md5_hex($self->{password}),
         );
@@ -133,24 +134,41 @@ sub actions
     return @{ shift->{actions} };
 }
 
-sub _nick2id
+sub nick2id : Memoize
 {
     my $self = shift;
-    my $cache = $self->{nick2id};
-
     my $i = 0;
-    my @need = grep !$cache->{$_}, @_;
-    my @have = grep  $cache->{$_}, @_;
-    my %results = mesh @have, @{[ @$cache{@have} ]};
-    if (@need) {
-        %results = (
-            %results,
-            $self->_rpc(nick2id => map { "nickname[" . $i++ . "]" => $_ } @need)
-        );
-    }
+    my %results = $self->_rpc(nick2id => map { "nickname[" . $i++ . "]" => $_ } @_);
 
     # TODO use Contextual::Return here
     return \%results;
+}
+
+# Not memoized : needs to be fresh data
+sub id2info
+{
+    my $self = shift;
+    my $i = 0;
+    my %results = $self->_rpc(get_all_stats => map { "account_id[" . $i++ . "]" => $_ } @_);
+
+    # TODO use Contextual::Return here
+    return \%results;
+}
+
+sub id2nick : Memoize
+{
+    my ($self, $id) = @_;
+    return $self->id2info($id)->{all_stats}->{$id}->{nickname};
+}
+
+sub friends
+{
+    my ($self) = @_;
+    my $me = $self->{me};
+    my $hash = $me->{buddy_list}{$me->{account_id}};
+    my @buddies = @$hash{sort { $a <=> $b } keys %$hash};
+    # TODO use Contextual::Return here
+    return @buddies;
 }
 
 # I'm not sure what the purpose of this sequence number is, or even if it is
@@ -238,7 +256,8 @@ sub channel_traffic
 {
     my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my ($userid, $chanid, $saying) = unpack "x V V Z*", $message;
-    my $who   = $self->{id2nick}{$userid} || "id $userid";
+    my $who   = $self->id2nick($userid);
+    # TODO make id2chan method like id2nick
     my $where = $self->{id2chan}{$chanid} || "id $chanid";
     say "user $who said in channel $where : '$saying'";
     $kernel->post($self->{bridge}, h2i_user_said_in_channel => $who, $where, $saying);
@@ -300,13 +319,16 @@ sub login_success
     my ($self, $kernel) = @_[OBJECT, KERNEL];
     say "login successful";
     $self->{logged_in} = 1;
+    my @friends = $self->friends;
+    use XXX;
+    WWW \@friends;
 }
 
 sub connected
 {
     my ($self, $kernel, $heap) = @_[OBJECT, KERNEL, HEAP];
     say "authenticating";
-    my $auth = pack "C V Z* V", 0xff, $self->{data}{account_id}, $self->{data}{cookie}, 2;
+    my $auth = pack "C V Z* V", 0xff, $self->{me}{account_id}, $self->{me}{cookie}, 2;
     ($self->{tcp} ||= $heap->{server})->put($auth);
 }
 
@@ -351,7 +373,7 @@ sub add_friend
 
     say "adding friend $friend";
 
-    my $id = $self->_nick2id($friend)->{$friend};
+    my $id = $self->nick2id($friend)->{$friend};
     my $seq = $self->_seq_num();
     # YAUBS
     my $packed = pack "C V V V", 0x0d, $id, $seq, $seq + 1;
@@ -394,7 +416,7 @@ sub channel_part_notice
     my ($code, $userid, $chanid) = unpack "C V V", $message;
     #$kernel->yield(hon_parted_channel => $userid, $chanid);
 
-    my $user = $self->{id2nick}{$userid} || "id $userid";
+    my $user = $self->id2nick($userid);
     say "User $user left channel $self->{id2chan}{$chanid}";
     my $chan = $self->{id2chan}{$chanid};
     $kernel->post($self->{bridge}, h2i_user_part_channel => $user, $chan);
@@ -442,7 +464,7 @@ sub _rpc
         @args,
     });
 
-    my $data = lex($response->content);
+    my $data = h2yaml($response->content);
     delete $data->{0}; # I don't understand this extra top-level key
     return wantarray ? %$data : $data;
 }
