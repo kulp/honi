@@ -8,7 +8,7 @@
  */
 
 #include "hd_parser.h"
-#include "filestore.h"
+#include "mmapstore.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -64,7 +64,7 @@ int main(int argc, char *argv[])
     }
 
     rc = hd_init(&state);
-    rc = hd_read_file_init(state, argv[optind]);
+    rc = hd_mmap_file_init(state, argv[optind]);
     if (rc) {
         fprintf(stderr, "Failed to open input file '%s'\n", argv[optind]);
         return EXIT_FAILURE;
@@ -83,7 +83,7 @@ int main(int argc, char *argv[])
 
     struct node *result = hd_parse(state);
     rc = dumper(f, result, HD_PRINT_PRETTY);
-    rc = hd_read_file_fini(state);
+    rc = hd_mmap_file_fini(state);
     rc = hd_fini(&state);
     hd_free(result);
 

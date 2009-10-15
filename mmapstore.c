@@ -1,4 +1,4 @@
-#include "filestore.h"
+#include "mmapstore.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -27,7 +27,7 @@ static const char* _chunker(void *data, unsigned long offset, size_t count)
     return &state->data[offset];
 }
 
-int hd_read_file_fini(struct hd_parser_state *parser_state)
+int hd_mmap_file_fini(struct hd_parser_state *parser_state)
 {
     struct filestate *state = hd_get_userdata(parser_state);
 
@@ -40,7 +40,7 @@ int hd_read_file_fini(struct hd_parser_state *parser_state)
     return 0;
 }
 
-int hd_read_file_init(struct hd_parser_state *parser_state, void *userdata)
+int hd_mmap_file_init(struct hd_parser_state *parser_state, void *userdata)
 {
     int rc = 0;
 

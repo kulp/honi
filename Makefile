@@ -8,7 +8,7 @@ TARGETS += hd2yaml
 
 all: $(TARGETS)
 
-hd2yaml: hd2yaml.o hd_parser.o filestore.o
+hd2yaml: hd2yaml.o hd_parser.o mmapstore.o
 
 CLEANFILES += $(TARGETS) *.[od]
 
