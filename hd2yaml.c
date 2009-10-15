@@ -33,7 +33,7 @@ int main(int argc, char *argv[])
     int rc = EXIT_SUCCESS;
 
     struct hd_parser_state *state;
-    hd_dumper_t dumper = hd_yaml2;
+    hd_dumper_t dumper = hd_yaml;
     char filename[4096];
     filename[0] = 0;
 
