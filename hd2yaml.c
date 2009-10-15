@@ -81,7 +81,7 @@ int main(int argc, char *argv[])
         f = stdout;
     }
 
-    struct node *result = hd_parse(state);
+    hd_node *result = hd_parse(state);
     rc = dumper(f, result, HD_PRINT_PRETTY);
     rc = hd_mmap_file_fini(state);
     rc = hd_fini(&state);

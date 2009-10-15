@@ -22,7 +22,7 @@ struct hd_parser_state {
     void *userdata;
 };
 
-struct node {
+struct hd_node {
     enum type {
         NODE_HASH   = 'a',
         NODE_BOOL   = 'b',
@@ -30,16 +30,16 @@ struct node {
         NODE_STRING = 's',
         NODE_NULL   = 'N',
     } type;
-    union {
+    union nodeval {
         struct hash {
             long len;
             struct hashval {
-                struct node *key;
-                struct node *val;
+                hd_node *key;
+                hd_node *val;
             } *pairs;
         } a;
         bool b;
-        long i;
+        long long i;
         struct {
             long  len;
             char *val;
@@ -47,18 +47,12 @@ struct node {
     } val;
 };
 
-/// @todo write a more efficient chunking allocator
-static void* hd_alloc(size_t size)
-{
-    return malloc(size);
-}
-
 static int compare_pairs(const void *a, const void *b)
 {
     int rc = 0;
 
-    const struct node *f = *(struct node **)a;
-    const struct node *s = *(struct node **)b;
+    const hd_node *f = *(hd_node **)a;
+    const hd_node *s = *(hd_node **)b;
 
     /// @todo support comparison of hash types ?
     // sort types separately (not mutually comparable usually anyway)
@@ -69,11 +63,11 @@ static int compare_pairs(const void *a, const void *b)
     return rc;
 }
 
-static struct node *hd_dispatch(struct hd_parser_state *state, int *pos);
+static hd_node *hd_dispatch(struct hd_parser_state *state, int *pos);
 
-static struct node *hd_handle_bool(struct hd_parser_state *state, int *pos)
+static hd_node *hd_handle_bool(struct hd_parser_state *state, int *pos)
 {
-    struct node *result = NULL;
+    hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 3);
 
@@ -84,16 +78,16 @@ static struct node *hd_handle_bool(struct hd_parser_state *state, int *pos)
         return HD_PARSE_FAILURE;
     }
 
-    result = hd_alloc(sizeof *result);
-    *result = (struct node){ .type = NODE_BOOL, .val = { .b = intval } };
+    result = malloc(sizeof *result);
+    *result = (hd_node){ .type = NODE_BOOL, .val = { .b = intval } };
     (*pos) += next - input;
 
     return result;
 }
 
-static struct node *hd_handle_hash(struct hd_parser_state *state, int *pos)
+static hd_node *hd_handle_hash(struct hd_parser_state *state, int *pos)
 {
-    struct node *result = NULL;
+    hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 10);
 
@@ -108,7 +102,7 @@ static struct node *hd_handle_hash(struct hd_parser_state *state, int *pos)
     (*pos) += inc;
     input = state->chunker(state->userdata, *pos, inc);
 
-    struct hashval *pairs = hd_alloc(len * sizeof *pairs);
+    struct hashval *pairs = malloc(len * sizeof *pairs);
     for (int i = 0; i < len; i++) {
         pairs[i].key = hd_dispatch(state, pos);
         pairs[i].val = hd_dispatch(state, pos);
@@ -117,8 +111,8 @@ static struct node *hd_handle_hash(struct hd_parser_state *state, int *pos)
     // putting entries in order allows bsearch() on them
     qsort(pairs, len, sizeof *pairs, compare_pairs);
 
-    result = hd_alloc(sizeof *result);
-    *result = (struct node){
+    result = malloc(sizeof *result);
+    *result = (hd_node){
         .type = NODE_HASH,
         .val = { .a = { .len = len, .pairs = pairs } },
     };
@@ -127,9 +121,9 @@ static struct node *hd_handle_hash(struct hd_parser_state *state, int *pos)
     return result;
 }
 
-static struct node *hd_handle_string(struct hd_parser_state *state, int *pos)
+static hd_node *hd_handle_string(struct hd_parser_state *state, int *pos)
 {
-    struct node *result = NULL;
+    hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 10);
 
@@ -143,13 +137,13 @@ static struct node *hd_handle_string(struct hd_parser_state *state, int *pos)
     (*pos) += next - input + 2; // 1 for colon, 1 for opening quote
     input = state->chunker(state->userdata, *pos, len);
 
-    char *val = hd_alloc(len + 1);
+    char *val = malloc(len + 1);
     /// @todo what about possibly escaped characters ?
     strncpy(val, next + 2, len);
     val[len] = 0;
 
-    result = hd_alloc(sizeof *result);
-    *result = (struct node){
+    result = malloc(sizeof *result);
+    *result = (hd_node){
         .type = NODE_STRING,
         .val = { .s = { .len = len, .val = val } }
     };
@@ -159,9 +153,9 @@ static struct node *hd_handle_string(struct hd_parser_state *state, int *pos)
     return result;
 }
 
-static struct node *hd_handle_int(struct hd_parser_state *state, int *pos)
+static hd_node *hd_handle_int(struct hd_parser_state *state, int *pos)
 {
-    struct node *result = NULL;
+    hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 10);
 
@@ -172,27 +166,27 @@ static struct node *hd_handle_int(struct hd_parser_state *state, int *pos)
         return HD_PARSE_FAILURE;
     }
 
-    result = hd_alloc(sizeof *result);
-    *result = (struct node){ .type = NODE_INT, .val = { .i = intval } };
+    result = malloc(sizeof *result);
+    *result = (hd_node){ .type = NODE_INT, .val = { .i = intval } };
     (*pos) += next - input;
 
     return result;
 }
 
-static struct node *hd_handle_null(struct hd_parser_state *state, int *pos)
+static hd_node *hd_handle_null(struct hd_parser_state *state, int *pos)
 {
-    struct node *result = NULL;
+    hd_node *result = NULL;
 
-    result = hd_alloc(sizeof *result);
-    *result = (struct node){ .type = NODE_NULL };
+    result = malloc(sizeof *result);
+    *result = (hd_node){ .type = NODE_NULL };
     (*pos) += 1; // 'N'
 
     return result;
 }
 
-static struct node *hd_dispatch(struct hd_parser_state *state, int *pos)
+static hd_node *hd_dispatch(struct hd_parser_state *state, int *pos)
 {
-    struct node *result = NULL;
+    hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 1);
 
@@ -220,41 +214,43 @@ static struct node *hd_dispatch(struct hd_parser_state *state, int *pos)
     return result;
 }
 
-#define INDENT_SIZE 4
-static int _hd_dump_recursive(FILE *f, const struct node *node, int level, int flags)
+static int _hd_dump_recurse(FILE *f, const hd_node *node, int level, int flags)
 {
     int rc = 0;
 
-    char spaces[(level + 1) * INDENT_SIZE + 1];
+    char spaces[(level + 1) * HD_INDENT_SIZE + 1];
     memset(spaces, ' ', sizeof spaces - 1);
     spaces[sizeof spaces - 1] = 0;
 
-    char less[level * INDENT_SIZE + 1];
+    char less[level * HD_INDENT_SIZE + 1];
     memset(less, ' ', sizeof less - 1);
     less[sizeof less - 1] = 0;
 
+    const union nodeval *v = &node->val;
+    bool pretty = flags & HD_PRINT_PRETTY;
+
     switch (node->type) {
-        case NODE_STRING: fprintf(f, "s:%ld:\"%s\"", node->val.s.len, node->val.s.val); break;
-        case NODE_BOOL  : fprintf(f, "b:%d"        , node->val.b);                      break;
-        case NODE_INT   : fprintf(f, "i:%ld"       , node->val.i);                      break;
-        case NODE_NULL  : fprintf(f, "N");                                              break;
+        case NODE_STRING: fprintf(f, "s:%ld:\"%s\"", v->s.len, v->s.val); break;
+        case NODE_BOOL  : fprintf(f, "b:%u"        , v->b);               break;
+        case NODE_INT   : fprintf(f, "i:%lld"      , v->i);               break;
+        case NODE_NULL  : fprintf(f, "N");                                break;
         case NODE_HASH  :
-            fprintf(f, "a:%ld:{%s", node->val.a.len, flags & HD_PRINT_PRETTY ? "\n" : "");
-            for (int i = 0; i < node->val.a.len; i++) {
-                if (flags & HD_PRINT_PRETTY)
+            fprintf(f, "a:%ld:{%s", v->a.len, pretty ? "\n" : "");
+            for (int i = 0; i < v->a.len; i++) {
+                if (pretty)
                     fputs(spaces, f);
-                rc = _hd_dump_recursive(f, node->val.a.pairs[i].key, level + 1, flags);
+                rc = _hd_dump_recurse(f, v->a.pairs[i].key, level + 1, flags);
                 fputs(";", f);
-                rc = _hd_dump_recursive(f, node->val.a.pairs[i].val, level + 1, flags);
+                rc = _hd_dump_recurse(f, v->a.pairs[i].val, level + 1, flags);
                 // this is a hack (inconsistent format / space-saver -- feature
                 // or bug, depending on your point of view) -- not my idea !
-                if (i != node->val.a.len - 1 && node->val.a.pairs[i].val->type != NODE_HASH)
+                if (i != v->a.len - 1 && v->a.pairs[i].val->type != NODE_HASH)
                     fputs(";", f);
-                if (flags & HD_PRINT_PRETTY)
+                if (pretty)
                     fputs("\n", f);
             }
 
-            if (flags & HD_PRINT_PRETTY)
+            if (pretty)
                 fputs(less, f);
             fputs("}", f);
             break;
@@ -264,7 +260,7 @@ static int _hd_dump_recursive(FILE *f, const struct node *node, int level, int f
     return rc;
 }
 
-static int node_emitter(yaml_emitter_t *e, const struct node *node)
+static int node_emitter(yaml_emitter_t *e, const hd_node *node)
 {
     int rc = 0;
 
@@ -279,7 +275,7 @@ static int node_emitter(yaml_emitter_t *e, const struct node *node)
     switch (node->type) {
         case NODE_INT:
             mode = SCALAR;
-            len  = sprintf(what = tempbuf, "%ld", node->val.i);
+            len  = sprintf(what = tempbuf, "%lld", node->val.i);
             break;
         case NODE_BOOL:
             mode = SCALAR;
@@ -331,7 +327,7 @@ static int node_emitter(yaml_emitter_t *e, const struct node *node)
 int hd_init(struct hd_parser_state **state)
 {
     if (!state) return -1;
-    return !!(*state = hd_alloc(sizeof **state));
+    return !!(*state = malloc(sizeof **state));
 }
 
 int hd_fini(struct hd_parser_state **state)
@@ -364,13 +360,13 @@ int hd_set_chunker(struct hd_parser_state *state, chunker_t chunker)
     return 0;
 }
 
-struct node *hd_parse(struct hd_parser_state *state)
+hd_node *hd_parse(struct hd_parser_state *state)
 {
     int pos = 0;
     return hd_dispatch(state, &pos);
 }
 
-int hd_yaml(FILE *f, const struct node *node, int flags)
+int hd_yaml(FILE *f, const hd_node *node, int flags)
 {
     int rc = 0;
 
@@ -409,17 +405,17 @@ error:
     goto done;
 }
 
-int hd_dump(FILE *f, const struct node *node, int flags)
+int hd_dump(FILE *f, const hd_node *node, int flags)
 {
     int rc = 0;
 
-    rc = _hd_dump_recursive(f, node, 0, flags);
-    fwrite("\n", 1, 1, f);
+    rc = _hd_dump_recurse(f, node, 0, flags);
+    fputs("\n", f);
 
     return rc;
 }
 
-void hd_free(struct node* node)
+void hd_free(hd_node* node)
 {
     switch (node->type) {
         case NODE_BOOL   : 
