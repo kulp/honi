@@ -70,22 +70,24 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    int fd;
+    FILE *f;
     if (filename[0]) {
-        fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-        if (fd < 0) {
+        f = fopen(filename, "w");
+        if (!f) {
             fprintf(stderr, "Failed to open output file '%s'\n", filename);
             return EXIT_FAILURE;
         }
     } else {
-        fd = fileno(stdout);
+        f = stdout;
     }
 
     struct node *result = hd_parse(state);
-    rc = dumper(fd, result, HD_PRINT_PRETTY);
+    rc = dumper(f, result, HD_PRINT_PRETTY);
     rc = hd_read_file_fini(state);
     rc = hd_fini(&state);
     hd_free(result);
+
+    fclose(f);
 
     return rc;
 }

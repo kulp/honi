@@ -3,11 +3,12 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdio.h>
 
 struct hd_parser_state;
 struct node;
 
-typedef int (*hd_dumper_t)(int fd, const struct node *node, int flags);
+typedef int (*hd_dumper_t)(FILE *f, const struct node *node, int flags);
 
 #define HD_PRINT_PRETTY 1
 
@@ -50,25 +51,25 @@ struct node *hd_parse(struct hd_parser_state *state);
 /**
  * Dumps a particular tree or subtree, as YAML, to a file descriptor @p fd.
  *
- * @param fd   the file descriptor to which to dump
+ * @param f    the stream to which to dump
  * @param node the root of the (sub)tree to dump
  * @param flags OR'ed flags that control the output
  *
  * @return zero on success, non-zero on undifferentiated error
  */
-int hd_yaml(int fd, const struct node *node, int flags);
+int hd_yaml(FILE *f, const struct node *node, int flags);
 
 /**
  * Dumps a particular tree or subtree, in the native format, to the file
  * descriptor @p fd.
  *
- * @param fd    the file descriptor to which to dump
+ * @param f     the stream to which to dump
  * @param node  the root of the (sub)tree to dump
  * @param flags OR'ed flags that control the output
  *
  * @return zero on success, non-zero on undifferentiated error
  */
-int hd_dump(int fd, const struct node *node, int flags);
+int hd_dump(FILE *f, const struct node *node, int flags);
 
 void hd_free(struct node* ptr);
 
