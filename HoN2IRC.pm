@@ -169,6 +169,24 @@ sub h2i_user_join_channel
     say "DEBUG: user $user ($safeuser) joined channel $chan ($safechan)";
 }
 
+sub h2i_friend_status
+{
+    my ($self, $kernel, $user, $status) = @_[OBJECT, KERNEL, ARG0, ARG1];
+    my $safeuser = $user; _safen($safeuser);
+    say "DEBUG: friend $user ($safeuser) is status $status";
+    if ($status) {
+        $self->{ircd}->yield(add_spoofed_nick => {
+                nick    => $safeuser,
+                # TODO make the mode mean something
+                #umode   => 'v',
+                ircname => $user,
+            });
+        $self->{ircd}->yield(daemon_cmd_join => $safeuser => $FRIENDS_CHANNEL);
+    } else {
+        $self->{ircd}->yield(del_spoofed_nick => $safeuser);
+    }
+}
+
 sub h2i_user_said_in_channel
 {
     my ($self, $kernel, $user, $chan, $message) = @_[OBJECT, KERNEL, ARG0, ARG1, ARG2];
