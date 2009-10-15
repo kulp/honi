@@ -104,7 +104,7 @@ static struct node *hd_handle_hash(struct hd_parser_state *state, int *pos)
         return HD_PARSE_FAILURE;
     }
 
-    int inc = next - input + 2; // 2 for ":}"
+    int inc = next - input + 2; // 2 for ":{"
     (*pos) += inc;
     input = state->chunker(state->userdata, *pos, inc);
 
@@ -220,23 +220,8 @@ static struct node *hd_dispatch(struct hd_parser_state *state, int *pos)
     return result;
 }
 
-/// portable version of GNU dprintf()
-static int _fdprintf(int fd, const char *fmt, ...)
-{
-    va_list vl;
-    va_start(vl, fmt);
-    int size = vsnprintf(NULL, 0, fmt, vl);
-    va_end(vl);
-    va_start(vl, fmt);
-    char buf[size + 1];
-    int result = vsnprintf(buf, size + 1, fmt, vl);
-    write(fd, buf, size);
-    va_end(vl);
-    return result;
-}
-
 #define INDENT_SIZE 4
-static int _hd_dump_recursive(int fd, const struct node *node, int level, int flags)
+static int _hd_dump_recursive(FILE *f, const struct node *node, int level, int flags)
 {
     int rc = 0;
 
@@ -249,29 +234,29 @@ static int _hd_dump_recursive(int fd, const struct node *node, int level, int fl
     less[sizeof less - 1] = 0;
 
     switch (node->type) {
-        case NODE_STRING: _fdprintf(fd, "s:%ld:\"%s\"", node->val.s.len, node->val.s.val); break;
-        case NODE_BOOL  : _fdprintf(fd, "b:%d"        , node->val.b);                      break;
-        case NODE_INT   : _fdprintf(fd, "i:%ld"       , node->val.i);                      break;
-        case NODE_NULL  : _fdprintf(fd, "N");                                              break;
+        case NODE_STRING: fprintf(f, "s:%ld:\"%s\"", node->val.s.len, node->val.s.val); break;
+        case NODE_BOOL  : fprintf(f, "b:%d"        , node->val.b);                      break;
+        case NODE_INT   : fprintf(f, "i:%ld"       , node->val.i);                      break;
+        case NODE_NULL  : fprintf(f, "N");                                              break;
         case NODE_HASH  :
-            _fdprintf(fd, "a:%ld:{%s", node->val.a.len, flags & HD_PRINT_PRETTY ? "\n" : "");
+            fprintf(f, "a:%ld:{%s", node->val.a.len, flags & HD_PRINT_PRETTY ? "\n" : "");
             for (int i = 0; i < node->val.a.len; i++) {
                 if (flags & HD_PRINT_PRETTY)
-                    write(fd, spaces, sizeof spaces - 1);
-                rc = _hd_dump_recursive(fd, node->val.a.pairs[i].key, level + 1, flags);
-                write(fd, ";", 1);
-                rc = _hd_dump_recursive(fd, node->val.a.pairs[i].val, level + 1, flags);
+                    fputs(spaces, f);
+                rc = _hd_dump_recursive(f, node->val.a.pairs[i].key, level + 1, flags);
+                fputs(";", f);
+                rc = _hd_dump_recursive(f, node->val.a.pairs[i].val, level + 1, flags);
                 // this is a hack (inconsistent format / space-saver -- feature
                 // or bug, depending on your point of view) -- not my idea !
                 if (i != node->val.a.len - 1 && node->val.a.pairs[i].val->type != NODE_HASH)
-                    write(fd, ";", 1);
+                    fputs(";", f);
                 if (flags & HD_PRINT_PRETTY)
-                    write(fd, "\n", 1);
+                    fputs("\n", f);
             }
 
             if (flags & HD_PRINT_PRETTY)
-                write(fd, less, sizeof less - 1);
-            write(fd, "}", 1);
+                fputs(less, f);
+            fputs("}", f);
             break;
         default: return -1;
     }
@@ -279,13 +264,10 @@ static int _hd_dump_recursive(int fd, const struct node *node, int level, int fl
     return rc;
 }
 
-static int write_handler(void *ext, unsigned char *buffer, size_t size)
+static int node_emitter(yaml_emitter_t *e, const struct node *node)
 {
-    return write((uintptr_t)ext, buffer, size) > 0;
-}
+    int rc = 0;
 
-static void node_emitter(yaml_emitter_t *e, const struct node *node)
-{
     enum { NONE, SCALAR, COLLECTION } mode = NONE;
 
     yaml_event_t event;
@@ -316,12 +298,13 @@ static void node_emitter(yaml_emitter_t *e, const struct node *node)
             break;
         case NODE_HASH:
             mode = COLLECTION;
-            yaml_mapping_start_event_initialize(&event, NULL, NULL, 0, YAML_BLOCK_MAPPING_STYLE); /// @todo 1 ?
+            yaml_mapping_start_event_initialize(&event, NULL, NULL, 0,
+                    YAML_BLOCK_MAPPING_STYLE);
             yaml_emitter_emit(e, &event);
 
             for (int i = 0; i < node->val.a.len; i++) {
-                node_emitter(e, node->val.a.pairs[i].key);
-                node_emitter(e, node->val.a.pairs[i].val);
+                if (!rc) rc = node_emitter(e, node->val.a.pairs[i].key);
+                if (!rc) rc = node_emitter(e, node->val.a.pairs[i].val);
             }
 
             yaml_mapping_end_event_initialize(&event);
@@ -329,13 +312,16 @@ static void node_emitter(yaml_emitter_t *e, const struct node *node)
             break;
         default:
             _err("Unrecognized node type '%d'", node->type);
-            return;
+            return -1;
     }
 
     if (mode == SCALAR) {
-        yaml_scalar_event_initialize(&event, NULL, NULL, (yaml_char_t*)what, len, true, true, style);
+        yaml_scalar_event_initialize(&event, NULL, NULL, (yaml_char_t*)what,
+                len, true, true, style);
         yaml_emitter_emit(e, &event);
     }
+
+    return rc;
 }
 
 //------------------------------------------------------------------------------
@@ -344,8 +330,8 @@ static void node_emitter(yaml_emitter_t *e, const struct node *node)
 
 int hd_init(struct hd_parser_state **state)
 {
-    *state = hd_alloc(sizeof **state);
-    return !!state;
+    if (!state) return -1;
+    return !!(*state = hd_alloc(sizeof **state));
 }
 
 int hd_fini(struct hd_parser_state **state)
@@ -384,7 +370,7 @@ struct node *hd_parse(struct hd_parser_state *state)
     return hd_dispatch(state, &pos);
 }
 
-int hd_yaml(int fd, const struct node *node, int flags)
+int hd_yaml(FILE *f, const struct node *node, int flags)
 {
     int rc = 0;
 
@@ -393,7 +379,7 @@ int hd_yaml(int fd, const struct node *node, int flags)
 
     yaml_emitter_initialize(&emitter);
 
-    yaml_emitter_set_output(&emitter, write_handler, (void*)(uintptr_t)fd);
+    yaml_emitter_set_output_file(&emitter, f);
 
     yaml_stream_start_event_initialize(&event, YAML_UTF8_ENCODING);
     if (!yaml_emitter_emit(&emitter, &event))
@@ -403,7 +389,7 @@ int hd_yaml(int fd, const struct node *node, int flags)
     if (!yaml_emitter_emit(&emitter, &event))
         goto error;
 
-    node_emitter(&emitter, node);
+    rc = node_emitter(&emitter, node);
 
     yaml_document_end_event_initialize(&event, 1);
     if (!yaml_emitter_emit(&emitter, &event))
@@ -413,18 +399,22 @@ int hd_yaml(int fd, const struct node *node, int flags)
     if (!yaml_emitter_emit(&emitter, &event))
         goto error;
 
-error:
+done:
     yaml_emitter_delete(&emitter);
-
     return rc;
+
+error:
+    rc = -1;
+
+    goto done;
 }
 
-int hd_dump(int fd, const struct node *node, int flags)
+int hd_dump(FILE *f, const struct node *node, int flags)
 {
     int rc = 0;
 
-    rc = _hd_dump_recursive(fd, node, 0, flags);
-    write(fd, "\n", 1);
+    rc = _hd_dump_recursive(f, node, 0, flags);
+    fwrite("\n", 1, 1, f);
 
     return rc;
 }
