@@ -6,13 +6,17 @@
 #include <stdio.h>
 
 struct hd_parser_state;
-struct node;
+typedef struct hd_node hd_node;
 
-typedef int (*hd_dumper_t)(FILE *f, const struct node *node, int flags);
+typedef int (*hd_dumper_t)(FILE *f, const hd_node *node, int flags);
 
 #define HD_PRINT_PRETTY 1
 
 #define HD_PARSE_FAILURE ((void*)-1)
+
+#ifndef HD_INDENT_SIZE
+#define HD_INDENT_SIZE 4
+#endif
 
 /**
  * Called to initialize an opaque HoNData parser state.
@@ -46,7 +50,7 @@ int hd_set_userdata(struct hd_parser_state *state, void *data);
  *
  * @return a @c node or @c HD_PARSE_FAILURE on undifferentiated error
  */
-struct node *hd_parse(struct hd_parser_state *state);
+hd_node *hd_parse(struct hd_parser_state *state);
 
 /**
  * Dumps a particular tree or subtree, as YAML, to a file descriptor @p fd.
@@ -57,7 +61,7 @@ struct node *hd_parse(struct hd_parser_state *state);
  *
  * @return zero on success, non-zero on undifferentiated error
  */
-int hd_yaml(FILE *f, const struct node *node, int flags);
+int hd_yaml(FILE *f, const hd_node *node, int flags);
 
 /**
  * Dumps a particular tree or subtree, in the native format, to the file
@@ -69,9 +73,9 @@ int hd_yaml(FILE *f, const struct node *node, int flags);
  *
  * @return zero on success, non-zero on undifferentiated error
  */
-int hd_dump(FILE *f, const struct node *node, int flags);
+int hd_dump(FILE *f, const hd_node *node, int flags);
 
-void hd_free(struct node* ptr);
+void hd_free(hd_node* ptr);
 
 #endif /* HD_PARSER_H_ */
 
