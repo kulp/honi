@@ -311,8 +311,8 @@ static void node_emitter(yaml_emitter_t *e, const struct node *node)
             break;
         case NODE_NULL:
             mode = SCALAR;
-            what = "null";
-            len = 4;
+            what = "~";
+            len = 1;
             break;
         case NODE_HASH:
             mode = COLLECTION;
