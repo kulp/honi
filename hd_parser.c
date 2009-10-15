@@ -279,63 +279,9 @@ static int _hd_dump_recursive(int fd, const struct node *node, int level, int fl
     return rc;
 }
 
-static void output_handler(SyckEmitter *e, char *ptr, long len)
-{
-    write((uintptr_t)e->bonus, ptr, len);
-}
-
 static int write_handler(void *ext, unsigned char *buffer, size_t size)
 {
     return write((uintptr_t)ext, buffer, size) > 0;
-}
-
-static void emitter_handler(SyckEmitter *e, st_data_t data)
-{
-    const struct node *node = (const struct node *)data;
-
-    enum { NONE, SCALAR, COLLECTION } mode = NONE;
-
-    char *what;
-    char tempbuf[10];
-    int len;
-    switch (node->type) {
-        case NODE_INT:
-            mode = SCALAR;
-            len  = sprintf(what = tempbuf, "%ld", node->val.i);
-            break;
-        case NODE_BOOL:
-            mode = SCALAR;
-            what = node->val.b ? "true" : "false";
-            len  = strlen(what);
-            break;
-        case NODE_STRING:
-            mode = SCALAR;
-            what = node->val.s.val;
-            len  = node->val.s.len;
-            break;
-        case NODE_NULL:
-            mode = SCALAR;
-            what = NULL;
-            len = 0;
-            break;
-        case NODE_HASH:
-            mode = COLLECTION;
-            syck_emit_map(e, NULL, map_none);
-
-            for (int i = 0; i < node->val.a.len; i++) {
-                syck_emit_item(e, (st_data_t)node->val.a.pairs[i].key);
-                syck_emit_item(e, (st_data_t)node->val.a.pairs[i].val);
-            }
-
-            syck_emit_end(e);
-            break;
-        default:
-            _err("Unrecognized node type '%d'", node->type);
-            return;
-    }
-
-    if (mode == SCALAR)
-        syck_emit_scalar(e, NULL, scalar_none, 1, 1, 1, what, len); // if it's a COLLECTION, it has already been emitted
 }
 
 static void node_emitter(yaml_emitter_t *e, const struct node *node)
@@ -442,26 +388,6 @@ int hd_yaml(int fd, const struct node *node, int flags)
 {
     int rc = 0;
 
-    /// @todo use @p flags
-
-    SyckEmitter *e = syck_new_emitter();
-    e->bonus = (void*)(uintptr_t)fd;
-
-    syck_output_handler (e, output_handler);
-    syck_emitter_handler(e, emitter_handler);
-
-    syck_emit(e, (st_data_t)node);
-    syck_emitter_flush(e, 0);
-
-    syck_free_emitter(e);
-
-    return rc;
-}
-
-int hd_yaml2(int fd, const struct node *node, int flags)
-{
-    int rc = 0;
-
     yaml_emitter_t emitter;
     yaml_event_t event;
 
@@ -469,7 +395,6 @@ int hd_yaml2(int fd, const struct node *node, int flags)
 
     yaml_emitter_set_output(&emitter, write_handler, (void*)(uintptr_t)fd);
 
-    /* Create and emit the STREAM-START event. */
     yaml_stream_start_event_initialize(&event, YAML_UTF8_ENCODING);
     if (!yaml_emitter_emit(&emitter, &event))
         goto error;
