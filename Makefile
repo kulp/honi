@@ -6,6 +6,8 @@ LDLIBS  += -lyaml
 CFILES  += $(wildcard *.c)
 TARGETS += hd2yaml
 
+vpath %.c parser
+
 all: $(TARGETS)
 
 hd2yaml: hd2yaml.o hd_parser.o mmapstore.o
