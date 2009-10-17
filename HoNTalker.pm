@@ -18,7 +18,7 @@ use YAML qw(Dump);
 use POE qw(Component::Client::TCP Filter::Stream);
 
 use lib ".";
-use ParserWrapper qw(h2yaml);
+use ParserWrapper qw(hd2yaml);
 
 ################################################################################
 
@@ -79,6 +79,7 @@ sub new
             password => md5_hex($self->{password}),
         );
 
+    die "Error: no data\n" unless keys %$data;
     die "Error: $data->{auth}\n" if $data->{auth};
 
     my $chatter = $data->{chat_url};
@@ -132,6 +133,17 @@ sub new
 sub actions
 {
     return @{ shift->{actions} };
+}
+
+sub id2fullnick : Memoize
+{
+    my ($self, $userid) = @_;
+    my $nick = $self->id2nick($userid);
+    my $user = $self->id2info($userid);
+    my $tag = $user->{clan_info}{$userid}{tag};
+    my $who = $tag ? "[$tag]$nick" : $nick;
+
+    return $who;
 }
 
 sub nick2id : Memoize
@@ -256,7 +268,7 @@ sub channel_traffic
 {
     my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
     my ($userid, $chanid, $saying) = unpack "x V V Z*", $message;
-    my $who   = $self->id2nick($userid);
+    my $who = $self->id2fullnick($userid);
     # TODO make id2chan method like id2nick
     my $where = $self->{id2chan}{$chanid} || "id $chanid";
     say "user $who said in channel $where : '$saying'";
@@ -319,9 +331,13 @@ sub login_success
     my ($self, $kernel) = @_[OBJECT, KERNEL];
     say "login successful";
     $self->{logged_in} = 1;
-    my @friends = $self->friends;
-    use XXX;
-    WWW \@friends;
+    my @friends = map {
+        my $tag  = $_->{clan_tag};
+        my $nick = $_->{nickname};
+        $tag ? "[$tag]$nick" : $nick
+    } $self->friends;
+    # TODO accurate status
+    $kernel->post($self->{bridge}, h2i_friend_status => $_, 1) for @friends;
 }
 
 sub connected
@@ -396,6 +412,7 @@ sub part_channel
 {
     my ($self, $kernel, $chan) = @_[OBJECT, KERNEL, ARG0];
     say "leaving channel '$chan'";
+    $self->{inchans}{lc $chan} = 0;
     $self->{tcp}->put(pack "C Z*", 0x22, $chan);
 }
 
@@ -464,7 +481,7 @@ sub _rpc
         @args,
     });
 
-    my $data = h2yaml($response->content);
+    my $data = hd2yaml($response->content);
     delete $data->{0}; # I don't understand this extra top-level key
     return wantarray ? %$data : $data;
 }

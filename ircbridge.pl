@@ -45,6 +45,7 @@ my $bridge = POE::Session->create(
                 h2i_user_whispered_to_me
                 h2i_user_whispered_to_friends
                 h2i_general_notice
+                h2i_friend_status
 
                 dispatch_command
             ) ],
