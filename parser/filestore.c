@@ -6,7 +6,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 #define _err(...) do { \
@@ -18,7 +17,6 @@ struct filestate {
     FILE *f;
     char *data;
     size_t len;
-    struct stat stat;
     size_t start, end;
 };
 
@@ -35,11 +33,17 @@ static const char* _chunker(void *data, unsigned long offset, size_t count)
 
     if (offset < state->start || offset + count >= state->end) {
         if (count > state->len) {
-            state->data = realloc(state->data, state->len = count * 2);
+            void *temp = realloc(state->data, state->len = count * 2);
+            if (!temp)
+                return NULL;
+            state->data = temp;
         }
 
-        fseek(state->f, state->start = offset, SEEK_SET);
+        if (fseek(state->f, state->start = offset, SEEK_SET))
+            return NULL;
         state->end = state->start + fread(state->data, 1, state->len, state->f);
+        if (state->end <= state->start)
+            return NULL;
     }
 
     return &state->data[offset - state->start];
@@ -53,17 +57,15 @@ int hd_read_file_init(struct hd_parser_state *parser_state, void *userdata)
 
     struct filestate *state = malloc(sizeof *state);
 
-    state->f = fopen(filename, "r");
-    if (!state->f) {
-        _err("File '%s' could not be opened (%d: %s)",
-             filename, errno, strerror(errno));
-        return -1;
-    }
-
-    rc = stat(filename, &state->stat);
-    if (rc) {
-        _err("stat: %d: %s", errno, strerror(errno));
-        return rc;
+    if (!strcmp(filename, "-")) {
+        state->f = stdin;
+    } else {
+        state->f = fopen(filename, "r");
+        if (!state->f) {
+            _err("File '%s' could not be opened (%d: %s)",
+                 filename, errno, strerror(errno));
+            return -1;
+        }
     }
 
     state->len = BUFSIZ;
@@ -82,7 +84,8 @@ int hd_read_file_fini(struct hd_parser_state *parser_state)
 
     if (!state) return -1;
 
-    fclose(state->f);
+    if (state->f != stdin)
+        fclose(state->f);
     free(state);
 
     return 0;
