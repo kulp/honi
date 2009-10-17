@@ -70,6 +70,8 @@ static hd_node *hd_handle_bool(struct hd_parser_state *state, int *pos)
     hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 3);
+    if (!input)
+        return NULL;
 
     char *next;
     int intval = strtol(&input[2], &next, 10);
@@ -90,6 +92,8 @@ static hd_node *hd_handle_hash(struct hd_parser_state *state, int *pos)
     hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 10);
+    if (!input)
+        return NULL;
 
     char *next;
     int len = strtol(&input[2], &next, 10);
@@ -101,11 +105,15 @@ static hd_node *hd_handle_hash(struct hd_parser_state *state, int *pos)
     int inc = next - input + 2; // 2 for ":{"
     (*pos) += inc;
     input = state->chunker(state->userdata, *pos, inc);
+    if (!input)
+        return NULL;
 
     struct hashval *pairs = malloc(len * sizeof *pairs);
     for (int i = 0; i < len; i++) {
         pairs[i].key = hd_dispatch(state, pos);
+        if (!pairs[i].key) return NULL;
         pairs[i].val = hd_dispatch(state, pos);
+        if (!pairs[i].val) return NULL;
     }
 
     // putting entries in order allows bsearch() on them
@@ -126,6 +134,8 @@ static hd_node *hd_handle_string(struct hd_parser_state *state, int *pos)
     hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 10);
+    if (!input)
+        return NULL;
 
     char *next;
     int len = strtol(&input[2], &next, 10);
@@ -136,6 +146,8 @@ static hd_node *hd_handle_string(struct hd_parser_state *state, int *pos)
 
     (*pos) += next - input + 2; // 1 for colon, 1 for opening quote
     input = state->chunker(state->userdata, *pos, len);
+    if (!input)
+        return NULL;
 
     char *val = malloc(len + 1);
     /// @todo what about possibly escaped characters ?
@@ -158,6 +170,8 @@ static hd_node *hd_handle_int(struct hd_parser_state *state, int *pos)
     hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 10);
+    if (!input)
+        return NULL;
 
     char *next;
     long intval = strtol(&input[2], &next, 10);
@@ -189,6 +203,8 @@ static hd_node *hd_dispatch(struct hd_parser_state *state, int *pos)
     hd_node *result = NULL;
 
     const char *input = state->chunker(state->userdata, *pos, 1);
+    if (!input)
+        return NULL;
 
     int here = 0;
     while (isspace(input[here]))
@@ -267,10 +283,9 @@ static int node_emitter(yaml_emitter_t *e, const hd_node *node)
     enum { NONE, SCALAR, COLLECTION } mode = NONE;
 
     yaml_event_t event;
-    yaml_scalar_style_t style = YAML_PLAIN_SCALAR_STYLE;
 
     char *what;
-    char tempbuf[10];
+    char tempbuf[20];
     int len;
     switch (node->type) {
         case NODE_INT:
@@ -313,7 +328,7 @@ static int node_emitter(yaml_emitter_t *e, const hd_node *node)
 
     if (mode == SCALAR) {
         yaml_scalar_event_initialize(&event, NULL, NULL, (yaml_char_t*)what,
-                len, true, true, style);
+                len, true, true, YAML_PLAIN_SCALAR_STYLE);
         yaml_emitter_emit(e, &event);
     }
 
@@ -420,8 +435,8 @@ void hd_free(hd_node* node)
     switch (node->type) {
         case NODE_BOOL   : 
         case NODE_INT    : 
-        case NODE_NULL   :                           break;
-        case NODE_STRING : free(node->val.s.val);    break;
+        case NODE_NULL   : break;
+        case NODE_STRING : free(node->val.s.val); break;
         case NODE_HASH   :
             for (int i = 0; i < node->val.a.len; i++) {
                 hd_free(node->val.a.pairs[i].key);
