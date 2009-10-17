@@ -21,20 +21,23 @@
 void usage(const char *me)
 {
     printf("Usage:\n"
-           "  %s [ OPTIONS ] filename\n"
+           "  %s [ OPTIONS ] [ filename ... ]\n"
            "where OPTIONS are among\n"
            "  -f fmt    select output format (\"yaml\" or \"pretty\")\n"
            "  -h        show this usage message\n"
            "  -o file   write output to this filename (default: stdout)\n"
+           "filename may be '-' or may be omitted to read from stdin\n"
+           "Note that if the -o option is specified and more than one input\n"
+           "file is given, the output will be repeatedly overwritten, not\n"
+           "appended to."
            , me);
 }
 
-int main(int argc, char *argv[])
+static int process(struct hd_parser_state *state, hd_dumper_t dumper,
+        const char *in, const char *out)
 {
-    int rc = EXIT_SUCCESS;
+    int rc = 0;
 
-    struct hd_parser_state *state;
-    hd_dumper_t dumper = hd_yaml;
     hd_store_init p_init;
     hd_store_fini p_fini;
 #if USE_MMAP
@@ -44,9 +47,43 @@ int main(int argc, char *argv[])
     p_init = hd_read_file_init;
     p_fini = hd_read_file_fini;
 #endif
+    rc = hd_init(&state);
+    rc = (*p_init)(state, (void*)in);
+    if (rc) {
+        fprintf(stderr, "Failed to open input file '%s'\n", in);
+        return EXIT_FAILURE;
+    }
 
-    char filename[4096];
-    filename[0] = 0;
+    FILE *f;
+    if (out && out[0] && strcmp(out, "-")) {
+        f = fopen(out, "w");
+        if (!f) {
+            fprintf(stderr, "Failed to open output file '%s'\n", out);
+            return EXIT_FAILURE;
+        }
+    } else {
+        f = stdout;
+    }
+
+    hd_node *result = hd_parse(state);
+    rc = dumper(f, result, HD_PRINT_PRETTY);
+    rc = (*p_fini)(state);
+    rc = hd_fini(&state);
+    hd_free(result);
+
+    fclose(f);
+
+    return rc;
+}
+
+int main(int argc, char *argv[])
+{
+    int rc = EXIT_SUCCESS;
+
+    struct hd_parser_state *state;
+    hd_dumper_t dumper = hd_yaml;
+
+    char *out = NULL;
 
     extern char *optarg;
     extern int optind, optopt;
@@ -62,43 +99,20 @@ int main(int argc, char *argv[])
                 }
                 break;
             case 'o':
-                strncpy(filename, optarg, sizeof filename);
+                out = strdup(optarg);
                 break;
             default : rc = EXIT_FAILURE; /* FALLTHROUGH */
             case 'h': usage(argv[0]); return EXIT_FAILURE;
         }
     }
 
-    if (argc - optind < 1 || argc - optind > 2) {
-        fprintf(stderr, "Supply an input filename and an optional output filename\n");
-        return EXIT_FAILURE;
-    }
+    if (argc - optind < 1)
+        rc = process(state, dumper, "-", out);
 
-    rc = hd_init(&state);
-    rc = (*p_init)(state, argv[optind]);
-    if (rc) {
-        fprintf(stderr, "Failed to open input file '%s'\n", argv[optind]);
-        return EXIT_FAILURE;
-    }
+    for (int i = optind; i < argc && !rc; i++)
+        rc = process(state, dumper, argv[i], out);
 
-    FILE *f;
-    if (filename[0]) {
-        f = fopen(filename, "w");
-        if (!f) {
-            fprintf(stderr, "Failed to open output file '%s'\n", filename);
-            return EXIT_FAILURE;
-        }
-    } else {
-        f = stdout;
-    }
-
-    hd_node *result = hd_parse(state);
-    rc = dumper(f, result, HD_PRINT_PRETTY);
-    rc = (*p_fini)(state);
-    rc = hd_fini(&state);
-    hd_free(result);
-
-    fclose(f);
+    free(out);
 
     return rc;
 }
