@@ -9,6 +9,7 @@
 
 #include "hd_parser.h"
 #include "mmapstore.h"
+#include "filestore.h"
 
 #include <fcntl.h>
 #include <stdio.h>
@@ -34,6 +35,16 @@ int main(int argc, char *argv[])
 
     struct hd_parser_state *state;
     hd_dumper_t dumper = hd_yaml;
+    hd_store_init p_init;
+    hd_store_fini p_fini;
+#if USE_MMAP
+    p_init = hd_mmap_file_init;
+    p_fini = hd_mmap_file_fini;
+#else
+    p_init = hd_read_file_init;
+    p_fini = hd_read_file_fini;
+#endif
+
     char filename[4096];
     filename[0] = 0;
 
@@ -64,7 +75,7 @@ int main(int argc, char *argv[])
     }
 
     rc = hd_init(&state);
-    rc = hd_mmap_file_init(state, argv[optind]);
+    rc = (*p_init)(state, argv[optind]);
     if (rc) {
         fprintf(stderr, "Failed to open input file '%s'\n", argv[optind]);
         return EXIT_FAILURE;
@@ -83,7 +94,7 @@ int main(int argc, char *argv[])
 
     hd_node *result = hd_parse(state);
     rc = dumper(f, result, HD_PRINT_PRETTY);
-    rc = hd_mmap_file_fini(state);
+    rc = (*p_fini)(state);
     rc = hd_fini(&state);
     hd_free(result);
 
