@@ -107,10 +107,10 @@ sub ircd_daemon_public
     # keep a map of safename <=> realname for maps (and for nicks too ?)
     say "$name said >>$message<< in $chan";
     if ($self->_is_me($name)) {
-        if ($chan eq $FRIENDS_CHANNEL) {
-            $kernel->yield(whisper_all_friends => $message);
-        } elsif ($chan eq $CONTROL_CHANNEL) {
+        if ($chan eq $CONTROL_CHANNEL or $message =~ /^\Q$CMD_PREFIX\E/xo) {
             $kernel->yield(dispatch_command => $message);
+        } elsif ($chan eq $FRIENDS_CHANNEL) {
+            $kernel->yield(whisper_all_friends => $message);
         } else {
             # TODO check that I am in this channel
             $kernel->yield(say_in_channel => _safen($chan), $message);
@@ -126,8 +126,12 @@ sub ircd_daemon_privmsg
     # it shouldn't be possible for this check to be false, but we want
     # to be sure we don't start a loop
     if ($self->_is_me($name)) {
-        # TODO map the user back to a safename
-        $kernel->yield(whisper_user => $user, $message);
+        if ($message =~ /^\Q$CMD_PREFIX\E/xo) {
+            $kernel->yield(dispatch_command => $message);
+        } else {
+            # TODO map the user back to a safename
+            $kernel->yield(whisper_user => $user, $message);
+        }
     }
 }
 
@@ -230,13 +234,61 @@ sub h2i_general_notice
     $self->{ircd}->yield(daemon_cmd_notice => $my_name, $self->{user}, $message);
 }
 
+# TODO move this table up ?
+# each sub is passed: @_ = ($self, $kernel, [ cmd list ], $string_input)
+my %ctrl_cmds = (
+    buddy => {
+        add => sub {
+            my ($self, $kernel, $cmds, $string) = @_;
+            $kernel->yield(_action_someone => new => buddy => $string);
+        },
+        delete => sub {
+            my ($self, $kernel, $cmds, $string) = @_;
+            $kernel->yield(_action_someone => remove => buddy => $string);
+        },
+        #list => undef,
+        message => sub {
+            my ($self, $kernel, $cmds, $string) = @_;
+            $kernel->yield(whisper_all_friends => $string);
+        },
+    },
+    #whois => sub { },
+    whisper => sub {
+        my ($self, $kernel, $cmds, $string) = @_;
+        my ($user, $message) = split " ", $string, 2;
+        $kernel->yield(whisper_user => $message, $string);
+    },
+);
+
+$ctrl_cmds{b} = {
+    a => $ctrl_cmds{buddy}{add},
+    d => $ctrl_cmds{buddy}{delete},
+    m => $ctrl_cmds{buddy}{message},
+    w => $ctrl_cmds{whisper},
+};
+
 sub dispatch_command
 {
     my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
-    if (my ($cmd, $args) = $message =~ /^\Q$CMD_PREFIX\E (\w+) (?:\s+ (.*?))? \s*$/x) {
-        my @args = split " ", $args;
-        # TODO implement commands table
+    my ($all) = $message =~ /^(?:\Q$CMD_PREFIX\E)? (?:\s* (.*?))? \s*$/xo;
+    my @rest = split " ", $all;
+    my $record = \%ctrl_cmds;
+    my @cmds;
+    my $piece;
+    while (ref($record) ne "CODE") {
+        $piece = shift @rest;
+        push @cmds, $piece;
+        #$self->{ircd}->yield(daemon_cmd_privmsg => $my_name, $CONTROL_CHANNEL, "ACK");
+        $record = $record->{$piece};
+        if (not defined $record) {
+            $self->{ircd}->yield(daemon_cmd_privmsg => $my_name, $CONTROL_CHANNEL,
+                                 "Invalid command");
+            return;
+        }
     }
+
+    my $arg = join " ", @rest;
+    $record->($self, $kernel, \@cmds, $arg, \@rest);
 }
 
 # Taken from the POE::Component::Server::IRC documentation. For debugging only.
