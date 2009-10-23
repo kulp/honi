@@ -10,7 +10,13 @@ vpath %.c parser
 
 all: $(TARGETS)
 
-hd2yaml: hd2yaml.o hd_parser.o mmapstore.o
+hd2yaml: hd2yaml.o hd_parser.o
+ifeq ($(USE_MMAP),1)
+hd2yaml: DEFINES += USE_MMAP
+hd2yaml: mmapstore.o
+else
+hd2yaml: filestore.o
+endif
 
 CLEANFILES += $(TARGETS) *.[od]
 
