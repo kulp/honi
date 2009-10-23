@@ -13,6 +13,7 @@ use Digest::MD5 qw(md5_hex);
 use IO::Socket::INET;
 use List::MoreUtils qw(mesh uniq);
 use LWP::UserAgent;
+use Sub::Install;
 use YAML qw(Dump);
 
 use POE qw(Component::Client::TCP Filter::Stream);
@@ -29,6 +30,7 @@ my $cr_url = qq($base/client_requester.php);
 
 my %actions = (
     0x00 => 'login_success',
+    0x01 => 'server_ping',
     0x03 => 'channel_traffic',
     0x04 => 'channel_presence',
     0x05 => 'channel_join_notice',
@@ -106,8 +108,8 @@ sub new
             $self => $self->{actions} = [ uniq qw(
                 _process_message
                 _dispatch
+                _action_someone
 
-                add_friend
                 channel_presence
                 channel_traffic
                 check_user
@@ -117,12 +119,18 @@ sub new
                 keepalive
                 login_success
                 my_presence
+                new_banned
+                new_buddy
+                new_ignored
                 part_channel
+                remove_banned
+                remove_buddy
+                remove_ignored
                 say_in_channel
                 server_input
-                whois_response
-                whisper_user
                 whisper_all_friends
+                whisper_user
+                whois_response
             ), values %actions ],
         ],
     );
@@ -181,17 +189,6 @@ sub friends
     my @buddies = @$hash{sort { $a <=> $b } keys %$hash};
     # TODO use Contextual::Return here
     return @buddies;
-}
-
-# I'm not sure what the purpose of this sequence number is, or even if it is
-# a sequence number, but it appears to be a monotonically increasing
-# non-time-linear sequence that is used at least for friend management. We fake
-# one.
-sub _seq_num
-{
-    my $self = shift;
-    $self->{seq} ||= time - 1234567890;
-    return $self->{seq} += 2;
 }
 
 ################################## E V E N T S #################################
@@ -262,6 +259,17 @@ sub channel_presence
 
     #$kernel->yield(part_channel => $channel) unless $self->{abide}{lc $channel}
     $kernel->delay(part_channel => 10, $channel) unless $self->{abide}{lc $channel}
+}
+
+sub server_ping
+{
+    my ($self, $kernel, $message) = @_[OBJECT, KERNEL, ARG0];
+    my ($code, $val) = unpack "C V", $message;
+    if ($val == 1) {
+        $kernel->yield('keepalive');
+    } else {
+        say "unknown value $val received in ping packet";
+    }
 }
 
 sub channel_traffic
@@ -382,20 +390,50 @@ sub keepalive
     $kernel->delay(keepalive => $self->{keepalive});
 }
 
-sub add_friend
+# works for $type in qw(buddy ignored banned)
+sub _action_someone
 {
-    my ($self, $kernel, $friend) = @_[OBJECT, KERNEL, ARG0];
+    my ($self, $kernel, $action, $type, $who) = @_[OBJECT, KERNEL, ARG0, ARG1, ARG2];
+    my $verb = "${action}_${type}";
     my $server = $self->{tcp};
 
-    say "adding friend $friend";
+    say "performing $action on $who";
 
-    my $id = $self->nick2id($friend)->{$friend};
-    my $seq = $self->_seq_num();
-    # YAUBS
-    my $packed = pack "C V V V", 0x0d, $id, $seq, $seq + 1;
+    my $id = $self->nick2id($who)->{$who};
+    warn $id;
+    my $me = $self->{me};
+    warn $me->{account_id};
+    warn $me->{cookie};
+    my %h = $self->_rpc($verb =>
+            account_id   => $me->{account_id},
+            "${type}_id" => $id,
+            cookie       => $me->{cookie},
+        );
+
+    if ($h{$verb} ne "OK") {
+        say "Unexpected response $h{$action} while performing $action on $type $who";
+        return;
+    }
+
+    # TODO determine if the response to the chat server is
+    my ($n1, $n2) = @{ $h{notification} }{qw(1 2)};
+    # TODO determine whether the 0x0d changes per $action or $type
+    my $packed = pack "C V V V", 0x0d, $id, $n1, $n2;
     warn HexDump($packed);
     # TODO
     $server->put($packed);
+}
+
+for my $action (qw(new remove)) {
+    for my $type (qw(buddy ignored banned)) {
+        Sub::Install::install_sub({
+                code => sub {
+                    my ($self, $kernel, $who) = @_[OBJECT, KERNEL, ARG0];
+                    $kernel->yield(_action_someone => $action => $type => $who);
+                },
+                as => "${action}_${type}",
+            });
+    }
 }
 
 sub join_channel
