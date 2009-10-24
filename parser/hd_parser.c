@@ -24,22 +24,29 @@ struct hd_parser_state {
 
 struct hd_node {
     enum type {
-        NODE_HASH   = 'a',
+        NODE_ARRAY  = 'a',
         NODE_BOOL   = 'b',
         NODE_INT    = 'i',
-        NODE_STRING = 's',
+        NODE_FLOAT  = 'd',
         NODE_NULL   = 'N',
+        NODE_OBJECT = 'O',
+        NODE_STRING = 's',
     } type;
     union nodeval {
-        struct hash {
+        struct array {
             long len;
-            struct hashval {
+            struct arrayval {
                 hd_node *key;
                 hd_node *val;
             } *pairs;
         } a;
         bool b;
+        long double d;
         long long i;
+        struct object {
+            char *type;
+            struct array val;
+        } o;
         struct {
             long  len;
             char *val;
@@ -54,7 +61,7 @@ static int compare_pairs(const void *a, const void *b)
     const hd_node *f = *(hd_node **)a;
     const hd_node *s = *(hd_node **)b;
 
-    /// @todo support comparison of hash types ?
+    /// @todo support comparison of array types ?
     // sort types separately (not mutually comparable usually anyway)
     rc = f->type - s->type;
     if (!rc && f->type == NODE_STRING)
@@ -87,6 +94,26 @@ static hd_node *hd_handle_bool(struct hd_parser_state *state, int *pos)
     return result;
 }
 
+static hd_node * _hd_object_or_hash(struct hd_parser_state *state, int *pos, int len, struct array *where)
+{
+    struct arrayval *pairs = malloc(len * sizeof *pairs);
+    for (int i = 0; i < len; i++) {
+        pairs[i].key = hd_dispatch(state, pos);
+        if (!pairs[i].key) return NULL;
+        pairs[i].val = hd_dispatch(state, pos);
+        if (!pairs[i].val) return NULL;
+    }
+
+    // putting entries in order allows bsearch() on them
+    qsort(pairs, len, sizeof *pairs, compare_pairs);
+
+    where->len   = len;
+    where->pairs = pairs;
+    (*pos) += 1; // 1 for the closing brace
+
+    return NULL;
+}
+
 static hd_node *hd_handle_hash(struct hd_parser_state *state, int *pos)
 {
     hd_node *result = NULL;
@@ -108,23 +135,108 @@ static hd_node *hd_handle_hash(struct hd_parser_state *state, int *pos)
     if (!input)
         return NULL;
 
-    struct hashval *pairs = malloc(len * sizeof *pairs);
-    for (int i = 0; i < len; i++) {
-        pairs[i].key = hd_dispatch(state, pos);
-        if (!pairs[i].key) return NULL;
-        pairs[i].val = hd_dispatch(state, pos);
-        if (!pairs[i].val) return NULL;
+    result = malloc(sizeof *result);
+    if (_hd_object_or_hash(state, pos, len, &result->val.a) == HD_PARSE_FAILURE)
+        return HD_PARSE_FAILURE;
+    result->type = NODE_ARRAY;
+
+    return result;
+}
+
+static hd_node *hd_handle_float(struct hd_parser_state *state, int *pos)
+{
+    hd_node *result = NULL;
+
+    const char *input = state->chunker(state->userdata, *pos, 10);
+    if (!input)
+        return NULL;
+
+    char *next;
+    long double floatval = strtold(&input[2], &next);
+    if (next == input) {
+        _err("Parse failure in %s", __func__);
+        return HD_PARSE_FAILURE;
     }
 
-    // putting entries in order allows bsearch() on them
-    qsort(pairs, len, sizeof *pairs, compare_pairs);
+    result = malloc(sizeof *result);
+    *result = (hd_node){ .type = NODE_FLOAT, .val = { .d = floatval } };
+    (*pos) += next - input;
+
+    return result;
+}
+
+static hd_node *hd_handle_int(struct hd_parser_state *state, int *pos)
+{
+    hd_node *result = NULL;
+
+    const char *input = state->chunker(state->userdata, *pos, 10);
+    if (!input)
+        return NULL;
+
+    char *next;
+    long intval = strtol(&input[2], &next, 10);
+    if (next == input) {
+        _err("Parse failure in %s", __func__);
+        return HD_PARSE_FAILURE;
+    }
 
     result = malloc(sizeof *result);
-    *result = (hd_node){
-        .type = NODE_HASH,
-        .val = { .a = { .len = len, .pairs = pairs } },
-    };
-    (*pos) += 1; // 1 for the closing brace
+    *result = (hd_node){ .type = NODE_INT, .val = { .i = intval } };
+    (*pos) += next - input;
+
+    return result;
+}
+
+static hd_node *hd_handle_null(struct hd_parser_state *state, int *pos)
+{
+    hd_node *result = NULL;
+
+    result = malloc(sizeof *result);
+    *result = (hd_node){ .type = NODE_NULL };
+    (*pos) += 1; // 'N'
+
+    return result;
+}
+
+static hd_node *hd_handle_object(struct hd_parser_state *state, int *pos)
+{
+    hd_node *result = NULL;
+
+    const char *input = state->chunker(state->userdata, *pos, 10);
+    if (!input) return HD_PARSE_FAILURE;
+
+    char *next;
+    int typelen = strtol(&input[2], &next, 10);
+    if (next == input) {
+        _err("Parse failure in %s", __func__);
+        return HD_PARSE_FAILURE;
+    }
+
+    (*pos) += next - input;;
+    // +2 for quotes
+    input = state->chunker(state->userdata, *pos, typelen + 2);
+    if (!input) return HD_PARSE_FAILURE;
+
+    char type[typelen + 1];
+    memcpy(type, &input[2], typelen);
+    type[typelen] = 0;
+    (*pos) += typelen + 4;
+    input = state->chunker(state->userdata, *pos, 10);
+    if (!input) return HD_PARSE_FAILURE;
+
+    int len = strtol(input, &next, 10);
+    if (next == input) {
+        _err("Parse failure in %s", __func__);
+        return HD_PARSE_FAILURE;
+    }
+
+    (*pos) += next - input + 2; // 2 for ":{"
+
+    result = malloc(sizeof *result);
+    if (_hd_object_or_hash(state, pos, len, &result->val.o.val) == HD_PARSE_FAILURE)
+        return HD_PARSE_FAILURE;
+    result->type = NODE_OBJECT;
+    result->val.o.type = strdup(type);
 
     return result;
 }
@@ -165,39 +277,6 @@ static hd_node *hd_handle_string(struct hd_parser_state *state, int *pos)
     return result;
 }
 
-static hd_node *hd_handle_int(struct hd_parser_state *state, int *pos)
-{
-    hd_node *result = NULL;
-
-    const char *input = state->chunker(state->userdata, *pos, 10);
-    if (!input)
-        return NULL;
-
-    char *next;
-    long intval = strtol(&input[2], &next, 10);
-    if (next == input) {
-        _err("Parse failure in %s", __func__);
-        return HD_PARSE_FAILURE;
-    }
-
-    result = malloc(sizeof *result);
-    *result = (hd_node){ .type = NODE_INT, .val = { .i = intval } };
-    (*pos) += next - input;
-
-    return result;
-}
-
-static hd_node *hd_handle_null(struct hd_parser_state *state, int *pos)
-{
-    hd_node *result = NULL;
-
-    result = malloc(sizeof *result);
-    *result = (hd_node){ .type = NODE_NULL };
-    (*pos) += 1; // 'N'
-
-    return result;
-}
-
 static hd_node *hd_dispatch(struct hd_parser_state *state, int *pos)
 {
     hd_node *result = NULL;
@@ -213,11 +292,13 @@ static hd_node *hd_dispatch(struct hd_parser_state *state, int *pos)
     (*pos) += here;
 
     switch (input[here]) {
+        case NODE_ARRAY:  result = hd_handle_hash  (state, pos); break;
         case NODE_BOOL:   result = hd_handle_bool  (state, pos); break;
-        case NODE_HASH:   result = hd_handle_hash  (state, pos); break;
-        case NODE_STRING: result = hd_handle_string(state, pos); break;
+        case NODE_FLOAT:  result = hd_handle_float (state, pos); break;
         case NODE_INT:    result = hd_handle_int   (state, pos); break;
         case NODE_NULL:   result = hd_handle_null  (state, pos); break;
+        case NODE_OBJECT: result = hd_handle_object(state, pos); break;
+        case NODE_STRING: result = hd_handle_string(state, pos); break;
 
         case '}':
         case ';': (*pos)++; result = hd_dispatch(state, pos); break;
@@ -245,22 +326,29 @@ static int _hd_dump_recurse(FILE *f, const hd_node *node, int level, int flags)
     const union nodeval *v = &node->val;
     bool pretty = flags & HD_PRINT_PRETTY;
 
+    const struct array *what = NULL;
     switch (node->type) {
         case NODE_STRING: fprintf(f, "s:%ld:\"%s\"", v->s.len, v->s.val); break;
         case NODE_BOOL  : fprintf(f, "b:%u"        , v->b);               break;
         case NODE_INT   : fprintf(f, "i:%lld"      , v->i);               break;
         case NODE_NULL  : fprintf(f, "N");                                break;
-        case NODE_HASH  :
+        case NODE_OBJECT:
+            what = &node->val.o.val;
+            fprintf(f, "O:%u:\"%s\":%ld:{%s", strlen(v->o.type), v->o.type, v->o.val.len, pretty ? "\n" : "");
+            goto inside_array;
+        case NODE_ARRAY :
+            if (!what) what = &node->val.a;
             fprintf(f, "a:%ld:{%s", v->a.len, pretty ? "\n" : "");
-            for (int i = 0; i < v->a.len; i++) {
+        inside_array:
+            for (int i = 0; i < what->len; i++) {
                 if (pretty)
                     fputs(spaces, f);
-                rc = _hd_dump_recurse(f, v->a.pairs[i].key, level + 1, flags);
+                rc = _hd_dump_recurse(f, what->pairs[i].key, level + 1, flags);
                 fputs(";", f);
-                rc = _hd_dump_recurse(f, v->a.pairs[i].val, level + 1, flags);
+                rc = _hd_dump_recurse(f, what->pairs[i].val, level + 1, flags);
                 // this is a hack (inconsistent format / space-saver -- feature
                 // or bug, depending on your point of view) -- not my idea !
-                if (i != v->a.len - 1 && v->a.pairs[i].val->type != NODE_HASH)
+                if (i != what->len - 1 && what->pairs[i].val->type != NODE_ARRAY)
                     fputs(";", f);
                 if (pretty)
                     fputs("\n", f);
@@ -284,6 +372,8 @@ static int node_emitter(yaml_emitter_t *e, const hd_node *node)
 
     yaml_event_t event;
 
+    yaml_char_t *tag = NULL;
+    const struct array *where = NULL;
     char *what;
     char tempbuf[20];
     int len;
@@ -307,22 +397,28 @@ static int node_emitter(yaml_emitter_t *e, const hd_node *node)
             what = "~";
             len = 1;
             break;
-        case NODE_HASH:
+        case NODE_OBJECT:
+            tag = (yaml_char_t*)node->val.o.type;
+            where = &node->val.o.val;
+            goto inside_array;
+        case NODE_ARRAY:
+            where = &node->val.a;
+        inside_array:
             mode = COLLECTION;
-            yaml_mapping_start_event_initialize(&event, NULL, NULL, 0,
+            yaml_mapping_start_event_initialize(&event, NULL, tag, 0,
                     YAML_BLOCK_MAPPING_STYLE);
             yaml_emitter_emit(e, &event);
 
-            for (int i = 0; i < node->val.a.len; i++) {
-                if (!rc) rc = node_emitter(e, node->val.a.pairs[i].key);
-                if (!rc) rc = node_emitter(e, node->val.a.pairs[i].val);
+            for (int i = 0; i < where->len; i++) {
+                if (!rc) rc = node_emitter(e, where->pairs[i].key);
+                if (!rc) rc = node_emitter(e, where->pairs[i].val);
             }
 
             yaml_mapping_end_event_initialize(&event);
             yaml_emitter_emit(e, &event);
             break;
         default:
-            _err("Unrecognized node type '%d'", node->type);
+            _err("Unrecognized node type '%c' (%d)", node->type, node->type);
             return -1;
     }
 
@@ -432,17 +528,25 @@ int hd_dump(FILE *f, const hd_node *node, int flags)
 
 void hd_free(hd_node* node)
 {
+    struct array *what = NULL;
+
     switch (node->type) {
         case NODE_BOOL   : 
         case NODE_INT    : 
         case NODE_NULL   : break;
         case NODE_STRING : free(node->val.s.val); break;
-        case NODE_HASH   :
-            for (int i = 0; i < node->val.a.len; i++) {
-                hd_free(node->val.a.pairs[i].key);
-                hd_free(node->val.a.pairs[i].val);
+        case NODE_OBJECT :
+            what = &node->val.o.val;
+            free(node->val.o.type);
+            goto inside_array;
+        case NODE_ARRAY  :
+            what = &node->val.a;
+        inside_array:
+            for (int i = 0; i < what->len; i++) {
+                hd_free(what->pairs[i].key);
+                hd_free(what->pairs[i].val);
             }
-            free(node->val.a.pairs);
+            free(what->pairs);
             break;
         default:
             _err("Invalid node type %d in %s", node->type, __func__);

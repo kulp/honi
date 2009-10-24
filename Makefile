@@ -1,4 +1,4 @@
-DEFINES += _POSIX_C_SOURCE=200112L
+DEFINES += _POSIX_C_SOURCE=200112L _XOPEN_SOURCE=700
 CFLAGS  += -std=c99 -W -Wall -Werror -Wextra -pedantic-errors \
 		   $(addprefix -D,$(DEFINES)) -Wno-unused-parameter
 CFLAGS  += -g # for debugging only
