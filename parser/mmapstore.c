@@ -27,9 +27,9 @@ static const char* _chunker(void *data, unsigned long offset, size_t count)
     return &state->data[offset];
 }
 
-int hd_mmap_file_fini(struct hd_parser_state *parser_state)
+int ps_mmap_file_fini(struct ps_parser_state *parser_state)
 {
-    struct filestate *state = hd_get_userdata(parser_state);
+    struct filestate *state = ps_get_userdata(parser_state);
 
     if (!state) return -1;
 
@@ -40,7 +40,7 @@ int hd_mmap_file_fini(struct hd_parser_state *parser_state)
     return 0;
 }
 
-int hd_mmap_file_init(struct hd_parser_state *parser_state, void *userdata)
+int ps_mmap_file_init(struct ps_parser_state *parser_state, void *userdata)
 {
     int rc = 0;
 
@@ -63,8 +63,8 @@ int hd_mmap_file_init(struct hd_parser_state *parser_state, void *userdata)
 
     state->data = mmap(NULL, state->stat.st_size, PROT_READ, MAP_PRIVATE, state->fd, 0);
 
-    hd_set_userdata(parser_state, state);
-    hd_set_chunker(parser_state, _chunker);
+    ps_set_userdata(parser_state, state);
+    ps_set_chunker(parser_state, _chunker);
 
     return rc;
 }

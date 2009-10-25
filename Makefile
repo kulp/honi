@@ -1,24 +1,33 @@
+LIB_EXT ?= .a
+RANLIB  ?= ranlib
 DEFINES += _POSIX_C_SOURCE=200112L _XOPEN_SOURCE=700
 CFLAGS  += -std=c99 -W -Wall -Werror -Wextra -pedantic-errors \
 		   $(addprefix -D,$(DEFINES)) -Wno-unused-parameter
 CFLAGS  += -g # for debugging only
 LDLIBS  += -lyaml
 CFILES  += $(wildcard *.c)
-TARGETS += hd2yaml
+TARGETS += ps2yaml
 
 vpath %.c parser
 
-all: $(TARGETS)
+STORE_C = $(wildcard parser/*store.c)
+STORE_O = $(STORE_C:.c=.o)
 
-hd2yaml: hd2yaml.o hd_parser.o
+all: libphpserialize$(LIB_EXT) $(TARGETS)
+
+libphpserialize$(LIB_EXT): ps_parser.o $(STORE_O)
+	$(AR) cr $@ $^
+	$(RANLIB) $@
+
+ps2yaml: ps2yaml.o ps_parser.o
 ifeq ($(USE_MMAP),1)
-hd2yaml: DEFINES += USE_MMAP
-hd2yaml: mmapstore.o
+ps2yaml: DEFINES += USE_MMAP
+ps2yaml: mmapstore.o
 else
-hd2yaml: filestore.o
+ps2yaml: filestore.o
 endif
 
-CLEANFILES += $(TARGETS) *.[od]
+CLEANFILES += $(TARGETS) *.[od] libphpserialize$(LIB_EXT)
 
 .PHONY: clean
 clean:

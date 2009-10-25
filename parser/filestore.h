@@ -1,11 +1,11 @@
 #ifndef FILESTORE_H_
 #define FILESTORE_H_
 
-#include "hd_parser.h"
-#include "hd_parser_store.h"
+#include "ps_parser.h"
+#include "ps_parser_store.h"
 
-int hd_read_file_init(struct hd_parser_state *state, void *data);
-int hd_read_file_fini(struct hd_parser_state *state);
+int ps_read_file_init(struct ps_parser_state *state, void *data);
+int ps_read_file_fini(struct ps_parser_state *state);
 
 #endif /* FILESTORE_H_ */
 

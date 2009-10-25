@@ -5,10 +5,42 @@
 #include <stddef.h>
 #include <stdio.h>
 
-struct hd_parser_state;
-typedef struct hd_node hd_node;
+struct ps_parser_state;
+typedef struct ps_node ps_node;
+struct ps_node {
+    enum type {
+        NODE_ARRAY  = 'a',
+        NODE_BOOL   = 'b',
+        NODE_INT    = 'i',
+        NODE_FLOAT  = 'd',
+        NODE_NULL   = 'N',
+        NODE_OBJECT = 'O',
+        NODE_STRING = 's',
+    } type;
+    union nodeval {
+        struct array {
+            long len;
+            struct arrayval {
+                ps_node *key;
+                ps_node *val;
+            } *pairs;
+            bool is_array;
+        } a;
+        bool b;
+        long double d;
+        long long i;
+        struct object {
+            char *type;
+            struct array val;
+        } o;
+        struct {
+            long  len;
+            char *val;
+        } s;
+    } val;
+};
 
-typedef int (*hd_dumper_t)(FILE *f, const hd_node *node, int flags);
+typedef int (*ps_dumper_t)(FILE *f, const ps_node *node, int flags);
 
 #define HD_PRINT_PRETTY 1
 
@@ -25,22 +57,22 @@ typedef int (*hd_dumper_t)(FILE *f, const hd_node *node, int flags);
  *
  * @return zero on success, non-zero on undifferentiated failure
  */
-int hd_init(struct hd_parser_state **state);
+int ps_init(struct ps_parser_state **state);
 
 /**
  * Called to finalize an opaque HoNData parser state. Frees all internal data
- * associated with the state, but not any data returned by hd_parse().
+ * associated with the state, but not any data returned by ps_parse().
  *
  * @param state a pointer to a state pointer
  *
  * @return zero on success, non-zero on undifferentiated failure.
  */
-int hd_fini(struct hd_parser_state **state);
+int ps_fini(struct ps_parser_state **state);
 
 /** @defgroup getset Getters and setters for state internals */
 /** @{ */
-void* hd_get_userdata(struct hd_parser_state *state);
-int hd_set_userdata(struct hd_parser_state *state, void *data);
+void* ps_get_userdata(struct ps_parser_state *state);
+int ps_set_userdata(struct ps_parser_state *state, void *data);
 /** @} */
 
 /**
@@ -50,7 +82,7 @@ int hd_set_userdata(struct hd_parser_state *state, void *data);
  *
  * @return a @c node or @c HD_PARSE_FAILURE on undifferentiated error
  */
-hd_node *hd_parse(struct hd_parser_state *state);
+ps_node *ps_parse(struct ps_parser_state *state);
 
 /**
  * Dumps a particular tree or subtree, as YAML, to a file descriptor @p fd.
@@ -61,7 +93,7 @@ hd_node *hd_parse(struct hd_parser_state *state);
  *
  * @return zero on success, non-zero on undifferentiated error
  */
-int hd_yaml(FILE *f, const hd_node *node, int flags);
+int ps_yaml(FILE *f, const ps_node *node, int flags);
 
 /**
  * Dumps a particular tree or subtree, in the native format, to the file
@@ -73,9 +105,9 @@ int hd_yaml(FILE *f, const hd_node *node, int flags);
  *
  * @return zero on success, non-zero on undifferentiated error
  */
-int hd_dump(FILE *f, const hd_node *node, int flags);
+int ps_dump(FILE *f, const ps_node *node, int flags);
 
-void hd_free(hd_node* ptr);
+void ps_free(ps_node* ptr);
 
 #endif /* HD_PARSER_H_ */
 

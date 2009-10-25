@@ -13,11 +13,11 @@
  */
 typedef const char* (*chunker_t)(void *userdata, unsigned long offset, size_t count);
 
-typedef int (*hd_store_init)(struct hd_parser_state *state, void *data);
-typedef int (*hd_store_fini)(struct hd_parser_state *state);
+typedef int (*ps_store_init)(struct ps_parser_state *state, void *data);
+typedef int (*ps_store_fini)(struct ps_parser_state *state);
 
-extern chunker_t hd_get_chunker(struct hd_parser_state *state);
-extern int hd_set_chunker(struct hd_parser_state *state, chunker_t chunker);
+extern chunker_t ps_get_chunker(struct ps_parser_state *state);
+extern int ps_set_chunker(struct ps_parser_state *state, chunker_t chunker);
 
 #endif
 

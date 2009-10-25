@@ -19,7 +19,7 @@ use YAML qw(Dump);
 use POE qw(Component::Client::TCP Filter::Stream);
 
 use lib ".";
-use ParserWrapper qw(hd2yaml);
+use ParserWrapper qw(ps2yaml);
 
 ################################################################################
 
@@ -519,7 +519,7 @@ sub _rpc
         @args,
     });
 
-    my $data = hd2yaml($response->content);
+    my $data = ps2yaml($response->content);
     delete $data->{0}; # I don't understand this extra top-level key
     return wantarray ? %$data : $data;
 }

@@ -1,13 +1,15 @@
 /**
- * Converts a file in HoNData hierarchical format to YAML or formatted HoNData.
+ * Converts a file in PHP-serialized format format to YAML or formatted
+ * PHP-serialized format.
+ *
  * Takes one argument, the file to parse. The output file may be specified with
  * the @c -o option. If no such option is provided, the output is written to @c
  * stdout. The default output option is YAML; this can also be specified with
- * the @c -f @c yaml option. The alternate format, pretty-printed HoNData, can
+ * the @c -f @c yaml option. The alternate format, pretty-printed PHPser, can
  * be specified with @c -f @c pretty.
  */
 
-#include "hd_parser.h"
+#include "ps_parser.h"
 #include "mmapstore.h"
 #include "filestore.h"
 
@@ -33,21 +35,21 @@ void usage(const char *me)
            , me);
 }
 
-static int process(struct hd_parser_state *state, hd_dumper_t dumper,
+static int process(struct ps_parser_state *state, ps_dumper_t dumper,
         const char *in, const char *out)
 {
     int rc = 0;
 
-    hd_store_init p_init;
-    hd_store_fini p_fini;
+    ps_store_init p_init;
+    ps_store_fini p_fini;
 #if USE_MMAP
-    p_init = hd_mmap_file_init;
-    p_fini = hd_mmap_file_fini;
+    p_init = ps_mmap_file_init;
+    p_fini = ps_mmap_file_fini;
 #else
-    p_init = hd_read_file_init;
-    p_fini = hd_read_file_fini;
+    p_init = ps_read_file_init;
+    p_fini = ps_read_file_fini;
 #endif
-    rc = hd_init(&state);
+    rc = ps_init(&state);
     rc = (*p_init)(state, (void*)in);
     if (rc) {
         fprintf(stderr, "Failed to open input file '%s'\n", in);
@@ -65,11 +67,11 @@ static int process(struct hd_parser_state *state, hd_dumper_t dumper,
         f = stdout;
     }
 
-    hd_node *result = hd_parse(state);
+    ps_node *result = ps_parse(state);
     rc = dumper(f, result, HD_PRINT_PRETTY);
     rc = (*p_fini)(state);
-    rc = hd_fini(&state);
-    hd_free(result);
+    rc = ps_fini(&state);
+    ps_free(result);
 
     fclose(f);
 
@@ -80,8 +82,8 @@ int main(int argc, char *argv[])
 {
     int rc = EXIT_SUCCESS;
 
-    struct hd_parser_state *state;
-    hd_dumper_t dumper = hd_yaml;
+    struct ps_parser_state *state;
+    ps_dumper_t dumper = ps_yaml;
 
     char *out = NULL;
 
@@ -91,8 +93,8 @@ int main(int argc, char *argv[])
     while ((ch = getopt(argc, argv, "f:ho:")) != -1) {
         switch (ch) {
             case 'f': 
-                     if (!strcasecmp(optarg, "yaml"  )) dumper = hd_yaml;
-                else if (!strcasecmp(optarg, "pretty")) dumper = hd_dump;
+                     if (!strcasecmp(optarg, "yaml"  )) dumper = ps_yaml;
+                else if (!strcasecmp(optarg, "pretty")) dumper = ps_dump;
                 else {
                     fprintf(stderr, "Invalid format '%s'\n", optarg);
                     return EXIT_FAILURE;
