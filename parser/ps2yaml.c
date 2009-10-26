@@ -68,7 +68,7 @@ static int process(struct ps_parser_state *state, ps_dumper_t dumper,
     }
 
     ps_node *result = ps_parse(state);
-    rc = dumper(f, result, HD_PRINT_PRETTY);
+    rc = dumper(f, result, PS_PRINT_PRETTY);
     rc = (*p_fini)(state);
     rc = ps_fini(&state);
     ps_free(result);
