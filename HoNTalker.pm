@@ -19,7 +19,7 @@ use YAML qw(Dump);
 use POE qw(Component::Client::TCP Filter::Stream);
 
 use lib ".";
-use ParserWrapper qw(ps2yaml);
+use PHP::Serialization::XS qw(unserialize);
 
 ################################################################################
 
@@ -185,10 +185,9 @@ sub friends
 {
     my ($self) = @_;
     my $me = $self->{me};
-    my $hash = $me->{buddy_list}{$me->{account_id}};
-    my @buddies = @$hash{sort { $a <=> $b } keys %$hash};
+    my $buddies = $me->{buddy_list}{$me->{account_id}};
     # TODO use Contextual::Return here
-    return @buddies;
+    return @$buddies;
 }
 
 ################################## E V E N T S #################################
@@ -519,8 +518,8 @@ sub _rpc
         @args,
     });
 
-    my $data = ps2yaml($response->content);
-    delete $data->{0}; # I don't understand this extra top-level key
+    my $data = unserialize($response->content);
+    #delete $data->{0}; # I don't understand this extra top-level key
     return wantarray ? %$data : $data;
 }
 
